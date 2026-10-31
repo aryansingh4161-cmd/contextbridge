@@ -213,16 +213,26 @@ def test_import_never_trusts_linked_dir(app: App, other_home: Path, tmp_path: Pa
 
 
 def test_git_never_runs_repo_configured_programs(tmp_path: Path) -> None:
+    """A hostile repo config (fsmonitor, clean/smudge/process filters, textconv) must never execute."""
     import subprocess
     from contextbridge.core.repo import repo_summary
     repo, marker = tmp_path / "evil", tmp_path / "PWNED"
     repo.mkdir()
-    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    g = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True)  # noqa: E731
+    g("init", "-q")
     hook = tmp_path / "hook.sh"
-    hook.write_text(f"#!/bin/sh\ntouch {marker}\n")
+    hook.write_text(f"#!/bin/sh\ntouch {marker}\ncat\n")
     hook.chmod(0o755)
-    subprocess.run(["git", "-C", str(repo), "config", "core.fsmonitor", str(hook)], check=True)
+    (repo / ".gitattributes").write_text("*.txt filter=evil diff=evil\n*.dat filter=proc\n")
     (repo / "a.txt").write_text("x")
+    (repo / "b.dat").write_text("y")
+    g("add", ".")
+    g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "c")
+    for k, v in [("core.fsmonitor", str(hook)), ("filter.evil.clean", str(hook)), ("filter.evil.smudge", str(hook)),
+                 ("filter.proc.process", str(hook)), ("diff.evil.textconv", str(hook))]:
+        g("config", k, v)
+    (repo / "a.txt").write_text("changed")
+    (repo / "b.dat").write_text("changed too")
     info = repo_summary(str(repo))
-    assert info is not None and "a.txt" in info["changes"]
-    assert not marker.exists(), "repo-configured fsmonitor program was executed"
+    assert info is not None and "a.txt" in info["changes"], info
+    assert not marker.exists(), "a repo-configured program was executed"

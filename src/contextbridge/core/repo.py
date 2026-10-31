@@ -21,13 +21,36 @@ GIT_TIMEOUT_S = 5
 MAX_CHANGES = 200
 
 
+_ENV = {"GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0", "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_ATTR_NOSYSTEM": "1"}
+# Settings that could make a read-only command execute something; repo config is untrusted.
+_FIXED = ["core.fsmonitor=false", "core.hooksPath=/dev/null", "core.pager=cat", "diff.external=",
+          "log.showSignature=false", "gpg.program=false", "core.sshCommand=false", "status.submoduleSummary=false"]
+
+
+def _run(path: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["git", *args], cwd=path, capture_output=True, text=True, timeout=GIT_TIMEOUT_S,
+                          stdin=subprocess.DEVNULL, env={**os.environ, **_ENV})
+
+
+def _overrides(path: Path) -> list[str]:
+    """Neutralize every filter / diff / merge driver the repo defines. Reading config runs nothing."""
+    out = _run(path, ["config", "--name-only", "--get-regexp", r"^(filter|diff|merge)\..*\."])
+    flags: list[str] = []
+    for name in sorted(set(out.stdout.split())):
+        section, _, key = name.rpartition(".")
+        if name.startswith("filter."):
+            flags += [f"{section}.clean=cat", f"{section}.smudge=cat", f"{section}.process=", f"{section}.required=false"]
+        elif name.startswith("diff.") and key in ("textconv", "command"):
+            flags.append(f"{name}=")
+        elif name.startswith("merge.") and key == "driver":
+            flags.append(f"{name}=false")
+    return flags
+
+
 def _git(path: Path, *args: str) -> str:
-    # Repo config is untrusted (a cloned repo can set core.fsmonitor or diff drivers that run
-    # programs): disable everything that can execute, and never page.
-    safe = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "core.hooksPath=/dev/null",
-            "-c", "diff.external=", "--no-pager"]
-    out = subprocess.run(["git", *safe, "-C", str(path), *args], capture_output=True, text=True, timeout=GIT_TIMEOUT_S, stdin=subprocess.DEVNULL,
-                         env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0"})
+    cfg = [*_FIXED, *_overrides(path)]
+    out = _run(path, [x for c in cfg for x in ("-c", c)] + ["--no-pager", *args])
     if out.returncode != 0:
         raise RuntimeError(out.stderr.strip().splitlines()[0] if out.stderr.strip() else "git failed")
     return out.stdout
@@ -55,13 +78,13 @@ def repo_summary(linked_dir: str | None) -> dict[str, Any] | None:
     except (RuntimeError, subprocess.TimeoutExpired):
         info["last_commit"] = "(no commits)"
     try:
-        lines = _git(path, "status", "--porcelain=v1", "--untracked-files=normal").splitlines()
+        lines = _git(path, "status", "--porcelain=v1", "--untracked-files=normal", "--ignore-submodules=all").splitlines()
         info["changes"] = [ln[3:] for ln in lines[:MAX_CHANGES]]
         info["changes_total"] = len(lines)
     except (RuntimeError, subprocess.TimeoutExpired):
         info["changes"] = []
     try:
-        stat = _git(path, "diff", "--no-ext-diff", "--no-textconv", "--shortstat").strip()
+        stat = _git(path, "diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all", "--shortstat").strip()
         info["diffstat"] = stat
     except (RuntimeError, subprocess.TimeoutExpired):
         pass
