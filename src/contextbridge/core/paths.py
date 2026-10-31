@@ -43,8 +43,12 @@ class DataPaths:
     def telemetry(self) -> Path:
         return self.root / "telemetry"
 
+    @property
+    def attachments(self) -> Path:
+        return self.root / "attachments"
+
     def subdirs(self) -> list[Path]:
-        return [self.backups, self.exports, self.logs, self.telemetry, self.telemetry / "state"]
+        return [self.backups, self.exports, self.logs, self.telemetry, self.telemetry / "state", self.attachments]
 
 
 def resolve_paths(root: str | os.PathLike[str] | None = None) -> DataPaths:

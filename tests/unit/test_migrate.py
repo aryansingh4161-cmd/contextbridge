@@ -78,9 +78,10 @@ def _with_extra(monkeypatch: pytest.MonkeyPatch, extra: Migration) -> None:
 
 def test_new_migration_backs_up_first(app: App, monkeypatch: pytest.MonkeyPatch) -> None:
     app.conn.execute("INSERT INTO projects(slug,name,created_at,updated_at) VALUES ('keep','Keep','t','t')")
-    _with_extra(monkeypatch, Migration(2, "0002_test.sql", "CREATE TABLE extra(x);"))
-    assert mig.migrate(app.conn, app.paths) == [2]
-    backups = list(app.paths.backups.glob("pre-migrate-0002-*.db"))
+    n = len(mig.available_migrations()) + 1  # the next free version, whatever exists today
+    _with_extra(monkeypatch, Migration(n, f"{n:04d}_test.sql", "CREATE TABLE extra(x);"))
+    assert mig.migrate(app.conn, app.paths) == [n]
+    backups = list(app.paths.backups.glob(f"pre-migrate-{n:04d}-*.db"))
     assert len(backups) == 1
     b = sqlite3.connect(backups[0])
     assert b.execute("SELECT slug FROM projects").fetchall() == [("keep",)]
@@ -89,12 +90,13 @@ def test_new_migration_backs_up_first(app: App, monkeypatch: pytest.MonkeyPatch)
 
 
 def test_failed_migration_rolls_back(app: App, monkeypatch: pytest.MonkeyPatch) -> None:
-    _with_extra(monkeypatch, Migration(2, "0002_bad.sql", "CREATE TABLE half(x);\nNOT VALID SQL;"))
+    n = len(mig.available_migrations()) + 1
+    _with_extra(monkeypatch, Migration(n, f"{n:04d}_bad.sql", "CREATE TABLE half(x);\nNOT VALID SQL;"))
     with pytest.raises(sqlite3.OperationalError):
         mig.migrate(app.conn, app.paths)
     assert "half" not in tables(app.conn)
-    assert 2 not in mig.applied_versions(app.conn)
-    assert list(app.paths.backups.glob("pre-migrate-0002-*.db"))  # backup still there to restore from
+    assert n not in mig.applied_versions(app.conn)
+    assert list(app.paths.backups.glob(f"pre-migrate-{n:04d}-*.db"))  # backup still there to restore from
 
 
 def test_checksum_drift_detected(app: App) -> None:

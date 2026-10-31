@@ -255,7 +255,7 @@ def cmd_handoff(args: argparse.Namespace) -> int:
     app, pid = _project_app(args)
     try:
         out = prepare_handoff(app.conn, app.paths, app.config, pid, mode=args.mode, profile=args.profile,
-                              fmt=args.format)
+                              fmt=args.format, include_attachments=args.with_attachments)
     finally:
         app.close()
     if args.json:
@@ -452,7 +452,23 @@ def cmd_import_commit(args: argparse.Namespace) -> int:
 
     app, pid = _project_app(args)
     try:
-        out = imp.discard(app.conn, pid, args.staging_id) if args.discard else imp.commit(app.conn, pid, args.staging_id)
+        select: list[int] | None = None
+        if args.select:
+            try:
+                select = [int(x) for x in args.select.replace(" ", "").split(",") if x]
+            except ValueError as exc:
+                raise CBError("invalid_input", "--select takes item numbers like 0,3,7") from exc
+        if args.match:
+            cands = imp._load(app.conn, pid, args.staging_id)["candidates"]
+            words = args.match.lower()
+            hits = [i for i, c in enumerate(cands)
+                    if words in str(c["data"].get("name") or c["data"].get("title") or "").lower()]
+            if not hits:
+                raise CBError("not_found", f"no staged item's title contains '{args.match}'")
+            select = sorted(set(select or []) | set(hits))
+            print(f"selected {len(hits)} item(s) matching '{args.match}': {hits}")
+        out = imp.discard(app.conn, pid, args.staging_id) if args.discard else imp.commit(
+            app.conn, pid, args.staging_id, select=select)
     finally:
         app.close()
     if args.discard:
@@ -639,7 +655,7 @@ def cmd_delete(args: argparse.Namespace) -> int:
 
     app, pid = _project_app(args)
     try:
-        if args.entry is None and args.session is None:
+        if args.entry is None and args.session is None and args.attachment is None:
             name = app.conn.execute("SELECT name FROM projects WHERE id = ?", (pid,)).fetchone()[0]
             if not args.yes:
                 typed = input(f"Delete the WHOLE project '{name}'? Type its exact name to confirm: ")
@@ -649,7 +665,8 @@ def cmd_delete(args: argparse.Namespace) -> int:
         else:
             if not args.yes:
                 raise CBError("confirm_required", "add --yes to delete (a recovery snapshot is made first)")
-            kind, tid = ("entry", args.entry) if args.entry is not None else ("session", args.session)
+            kind, tid = (("entry", args.entry) if args.entry is not None else ("session", args.session)
+                         if args.session is not None else ("attachment", args.attachment))
             out = forget(app.conn, app.paths, pid, kind, tid, confirm=True)
     finally:
         app.close()
@@ -708,6 +725,48 @@ def cmd_migrate(args: argparse.Namespace) -> int:
     print(f"schema: {len(applied)}/{len(available_migrations())} migrations applied"
           + (f"; CHECKSUM DRIFT: {drift}" if drift else "; checksums ok"))
     return EXIT_ERR if drift else EXIT_OK
+
+
+def cmd_attach(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from ..core.attachments import add
+
+    app, pid = _project_app(args)
+    try:
+        out = add(app.conn, app.paths, app.config, pid, str(Path(args.file).expanduser().resolve()), note=args.note,
+                  entry_id=args.entry, provenance="user_stated", restrict=False)
+    finally:
+        app.close()
+    if out["stored"]:
+        print(f"Attached A-{out['attachment_id']:04d}: {out['filename']} ({out['bytes']} bytes, searchable by "
+              f"{out['searchable']})")
+    else:
+        print(f"Already attached as A-{out['attachment_id']:04d} ({out['filename']})")
+    if out.get("warning"):
+        print(f"! {out['warning']}")
+    return EXIT_OK
+
+
+def cmd_attachments(args: argparse.Namespace) -> int:
+    from ..core.attachments import list_for
+
+    app, pid = _project_app(args)
+    try:
+        rows = list_for(app.conn, app.paths, pid)
+    finally:
+        app.close()
+    if args.json:
+        _print_json(rows)
+        return EXIT_OK
+    if not rows:
+        print("No attachments. Add one with: ctxb attach <project> <file> --note \"what it is\"")
+    for r in rows:
+        print(f"A-{r['id']:04d}  {r['filename']:<40} {r['bytes']:>10} B  {r['note'] or ''}"
+              + ("" if r["present"] else "  (FILE MISSING)"))
+        if args.paths:
+            print(f"        {r['path']}")
+    return EXIT_OK
 
 
 def cmd_version(_args: argparse.Namespace) -> int:
@@ -776,6 +835,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--mode", default="standard", choices=["quick", "standard", "detailed", "knowledge_package"])
     sp.add_argument("--profile", help="upload profile from config (default: defaults.profile)")
     sp.add_argument("--format", choices=["md", "txt"])
+    sp.add_argument("--with-attachments", action=argparse.BooleanOptionalAction, default=None,
+                    help="copy attached files into the package (default: only for knowledge_package)")
     sp.add_argument("--json", action="store_true")
     sp = add("context", cmd_context, "print a project's context (what get_context returns)")
     sp.add_argument("project")
@@ -807,6 +868,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("import-commit", cmd_import_commit, "commit (or --discard) a staged import")
     sp.add_argument("project")
     sp.add_argument("staging_id", type=int)
+    sp.add_argument("--select", help="only these item numbers from the preview, e.g. 0,3,7")
+    sp.add_argument("--match", help="only items whose title/conversation name contains this text")
     sp.add_argument("--discard", action="store_true")
     sp = add("ingest-transcript", cmd_ingest, "archive a Claude Code transcript (.jsonl) into a project")
     sp.add_argument("project")
@@ -847,10 +910,20 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("snippet", cmd_snippet, "print paste-ready instructions (CLAUDE.md or Desktop project instructions)")
     sp.add_argument("kind", choices=["claude-md", "desktop"])
     sp.add_argument("project", help="project slug")
-    sp = add("delete", cmd_delete, "delete an entry, a session, or (no flags) a whole project; recovery point first")
+    sp = add("attach", cmd_attach, "store a copy of a file (screenshot, PDF, document) with a project")
+    sp.add_argument("project")
+    sp.add_argument("file")
+    sp.add_argument("--note", help="what it is / why it matters")
+    sp.add_argument("--entry", type=int, help="knowledge entry it belongs to")
+    sp = add("attachments", cmd_attachments, "list a project's attachments")
+    sp.add_argument("project")
+    sp.add_argument("--paths", action="store_true", help="show where each copy is stored")
+    sp.add_argument("--json", action="store_true")
+    sp = add("delete", cmd_delete, "delete an entry, a session, an attachment, or (no flags) a whole project")
     sp.add_argument("project")
     sp.add_argument("--entry", type=int)
     sp.add_argument("--session", type=int)
+    sp.add_argument("--attachment", type=int)
     sp.add_argument("--yes", action="store_true")
     sp.add_argument("--confirm-name", help="with --yes, the exact project name (non-interactive)")
     sp = add("purge", cmd_purge, "PERMANENTLY remove a project (or --entry) incl. snapshots, exports and backups")

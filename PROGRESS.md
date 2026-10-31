@@ -2,7 +2,7 @@
 
 Resume from this file alone. Spec: `docs/SPEC.md` (copy of `../ContextBridge_ClaudeCode_Prompt.md`). Blueprint: `docs/BLUEPRINT.md`. Acceptance map: `docs/ACCEPTANCE.md`.
 
-**Current state (2026-10-31):** **MVP complete: M0–M9 done.** 215/215 tests pass (unit, integration over real stdio, acceptance incl. SIGKILL tests), mypy --strict clean. 12 MCP tools + 3 prompts + 5 resources. All 24 acceptance tests mapped and passing (`docs/ACCEPTANCE.md`). Installed on the user's Mac (Claude Code: MCP + hooks + status line; Claude Desktop) (updated to the M9 version by the user on 2026-10-31). Code: https://github.com/aryansingh4161-cmd/contextbridge (public, MIT, branch `main`). Open items: see *Known issues / open items* at the end.
+**Current state (2026-10-31):** **MVP complete: M0–M9 done.** 215/215 tests pass (unit, integration over real stdio, acceptance incl. SIGKILL tests), mypy --strict clean. 13 MCP tools + 3 prompts + 5 resources (attach_file added post-MVP). All 24 acceptance tests mapped and passing (`docs/ACCEPTANCE.md`). Installed on the user's Mac (Claude Code: MCP + hooks + status line; Claude Desktop) (updated to the M9 version by the user on 2026-10-31). Code: https://github.com/aryansingh4161-cmd/contextbridge (public, MIT, branch `main`). Open items: see *Known issues / open items* at the end.
 
 | Milestone | Status | Verified how | Notes |
 |---|---|---|---|
@@ -28,6 +28,15 @@ Resume from this file alone. Spec: `docs/SPEC.md` (copy of `../ContextBridge_Cla
 - [x] MCP server (stdio, `mcp` 2.3 `MCPServer`) with instructions, `list_projects`, `create_project`; CBError → structured tool error
 - [x] CLI `ctxb init | projects | doctor | version` (stdlib-only import path)
 - [x] `make_slug`: NFKD accent stripping; non-ASCII-only names refused → explicit slug
+
+## Post-MVP: attachments + word-for-word chat import (2026-11-01, user asked for both)
+- [x] Schema migration 0002: `attachments` (+ `attachments_fts`); files copied to `~/.contextbridge/attachments/<slug>/<sha256>.<ext>` (700/600), deduped per project, ≤ 50 MB (`[attachments] max_bytes`), image/PDF/Office/text types; text-like files redacted + indexed
+- [x] MCP `attach_file` (13 tools; AI-chosen paths limited to allowed folders), attachments in `search_memory` results (wrapped as data), `forget` target `attachment`; CLI `ctxb attach`, `ctxb attachments`, `ctxb delete --attachment`, `ctxb handoff --with-attachments`
+- [x] Handoffs list attachments in "Files & repo" (tag `[A-0001 …]`, note, size, related entry); `knowledge_package` copies them into `attachments/` with manifest entries and upload plan
+- [x] Full export/import carries the files (sha-verified), rebuilds the text index; forget project / purge remove them (recovery archive keeps them until purge)
+- [x] Claude export import keeps the text of files attached in chats (`extracted_content`) word for word and names other files; `ctxb import-commit --select 0,3,7 / --match "name"` to keep only this project's conversations
+- [x] Fix during review: the path check took the allowed file types from a module global that I temporarily swapped — unsafe with parallel tool threads; now a parameter
+- [x] 225 tests pass (new: tests/unit/test_attachments.py, stdio attach test), mypy clean, TOOLS.md regenerated
 
 ## Post-MVP: first real project (2026-10-31, user chose "set up my first real project" → ContextBridge itself)
 - [x] Project `contextbridge` created in the user's REAL memory (`~/.contextbridge`), seeded from this build: 26 entries (11 decisions, 3 rejected approaches, 1 requirement, 1 constraint, 4 lessons, 2 facts, 3 open questions, 1 milestone) with honest provenance (4 user_stated, 12 user_confirmed, 10 verified), 6 Live State sections, 4 tasks, checkpoint #1; linked to the repo folder; `CLAUDE.md` added to the repo

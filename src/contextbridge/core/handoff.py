@@ -164,7 +164,8 @@ def prepare_handoff(conn: sqlite3.Connection, paths: DataPaths, config: Config, 
                     mode: Mode = "standard", profile: str | None = None, fmt: str | None = None,
                     final_updates: CheckpointIn | None = None, near_duplicate_threshold: float = 0.85,
                     emergency_banner: str | None = None,
-                    emergency_meta: dict[str, Any] | None = None) -> dict[str, Any]:
+                    emergency_meta: dict[str, Any] | None = None,
+                    include_attachments: bool | None = None) -> dict[str, Any]:
     if mode not in MODES:
         raise CBError("invalid_input", f"mode '{mode}' is invalid", f"one of {', '.join(MODES)}")
     prof = load_profile(config, profile)
@@ -182,6 +183,8 @@ def prepare_handoff(conn: sqlite3.Connection, paths: DataPaths, config: Config, 
 
     data = collect(conn, project_id)
     data.repo = repo_summary(data.project.get("linked_dir"))
+    with_files = (mode == "knowledge_package") if include_attachments is None else include_attachments
+    data.extra["attachments_included"] = bool(with_files and data.attachments)
     gen_at = now_iso()
     level = "standard" if mode == "knowledge_package" else mode
     package_type = "knowledge_package" if mode == "knowledge_package" else "session_handoff"
@@ -215,13 +218,6 @@ def prepare_handoff(conn: sqlite3.Connection, paths: DataPaths, config: Config, 
     if primary_tokens > budget:
         warnings.append(f"primary file is ~{primary_tokens} tokens, over the {level} budget of {budget}")
 
-    upload = [f["name"] for f in files]
-    plan: list[list[str]] = [upload]
-    if prof.max_files and len(upload) > prof.max_files:
-        plan = [upload[i:i + prof.max_files] for i in range(0, len(upload), prof.max_files)]
-        warnings.append(f"{len(upload)} files exceed profile '{prof.name}' limit of {prof.max_files} per upload: "
-                        f"upload batch 1 now ({', '.join(plan[0])}); the rest when the assistant asks for them")
-
     stamp = datetime.now().astimezone().strftime("%Y-%m-%d_%H%M")
     slug = data.project["slug"]
     ensure_private_dir(paths.exports)
@@ -231,10 +227,20 @@ def prepare_handoff(conn: sqlite3.Connection, paths: DataPaths, config: Config, 
     for fname, text in out_texts.items():
         _write(out_dir / fname, text)
 
+    if data.extra["attachments_included"]:
+        files += _copy_attachments(paths, data, out_dir, prof, warnings)
+
+    upload = [f["name"] for f in files if f.get("upload")]
+    plan: list[list[str]] = [upload]
+    if prof.max_files and len(upload) > prof.max_files:
+        plan = [upload[i:i + prof.max_files] for i in range(0, len(upload), prof.max_files)]
+        warnings.append(f"{len(upload)} files exceed profile '{prof.name}' limit of {prof.max_files} per upload: "
+                        f"upload batch 1 now ({', '.join(plan[0])}); the rest when the assistant asks for them")
+
     sidecar = _sidecar(conn, project_id, data, gen_at)
     sidecar_text, _ = redact(json.dumps(sidecar, ensure_ascii=False, indent=1))
     _write(out_dir / "source_references.json", sidecar_text)
-    total_tokens = {k: sum(f["est_tokens"][k] for f in files) for k in ("low", "est", "high")}
+    total_tokens = {k: sum(f["est_tokens"][k] for f in files if "est_tokens" in f) for k in ("low", "est", "high")}
     if prof.max_total_tokens and total_tokens["est"] > prof.max_total_tokens:
         warnings.append(f"the package is ~{total_tokens['est']} tokens in total, over profile '{prof.name}' "
                         f"max_total_tokens={prof.max_total_tokens}: upload 01 first and add companions as needed")
@@ -284,7 +290,7 @@ def prepare_handoff(conn: sqlite3.Connection, paths: DataPaths, config: Config, 
     result: dict[str, Any] = {
         "directory": str(out_dir),
         "primary_file": str(out_dir / files[0]["name"]),
-        "files": [{"path": str(out_dir / f["name"]), "bytes": f["bytes"], "est_tokens_range": f["est_tokens"],
+        "files": [{"path": str(out_dir / f["name"]), "bytes": f["bytes"], "est_tokens_range": f.get("est_tokens"),
                    "role": f["role"]} for f in files],
         "manifest_path": str(out_dir / "00_manifest.json"),
         "report": report, "summary_3_lines": summary, "warnings": warnings,
@@ -294,6 +300,35 @@ def prepare_handoff(conn: sqlite3.Connection, paths: DataPaths, config: Config, 
         result["final_checkpoint"] = {k: cp_out[k] for k in ("checkpoint_id", "session_id") if k in cp_out} | (
             {"item_results": cp_out["item_results"]} if "item_results" in cp_out else {})
     return result
+
+
+def _copy_attachments(paths: DataPaths, data: ProjectData, out_dir: Path, prof: Profile,
+                      warnings: list[str]) -> list[dict[str, Any]]:
+    """Copy the project's attachments into `<package>/attachments/` and describe them for the manifest."""
+    import re
+    import shutil
+
+    from .attachments import stored_path
+
+    d = out_dir / "attachments"
+    ensure_private_dir(d)
+    out = []
+    for a in data.attachments:
+        src = stored_path(paths, data.project["slug"], a)
+        if not src.exists():
+            warnings.append(f"attachment {a['tag']} '{a['filename']}' is missing from the memory folder")
+            continue
+        name = f"A-{a['id']:04d}_{re.sub(r'[^A-Za-z0-9._-]', '_', a['filename'])[:120]}"
+        dest = d / name
+        shutil.copyfile(src, dest)
+        ensure_private_file(dest)
+        fits = a["bytes"] <= prof.max_file_bytes
+        if not fits:
+            warnings.append(f"attachment {name} is larger than profile '{prof.name}' allows per file")
+        out.append({"name": f"attachments/{name}", "role": "attachment", "bytes": a["bytes"], "sha256": a["sha256"],
+                    "mime": a["mime"], "upload": fits, "required": False, "source": f"attachment {a['id']}",
+                    "note": a.get("note")})
+    return out
 
 
 def _sidecar(conn: sqlite3.Connection, project_id: int, data: ProjectData, gen_at: str) -> dict[str, Any]:

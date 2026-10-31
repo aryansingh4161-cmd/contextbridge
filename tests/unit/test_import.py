@@ -119,7 +119,7 @@ def test_staging_is_project_scoped_and_expires(app: App) -> None:
     (lambda d: "relative/notes.md", "absolute"),
     (lambda d: str(d / "missing.md"), "does not exist"),
     (lambda d: _write(d / ".secret" / "keys.md", "x"), "hidden"),
-    (lambda d: _write(d / "run.sh", "echo"), "can't be imported"),
+    (lambda d: _write(d / "run.sh", "echo"), "can't be used here"),
     (lambda d: _write(d / "big.md", "x" * 3000), "import limit"),
     (lambda d: _write_bytes(d / "bin.txt", b"\xff\xfe\x00bad"), "UTF-8"),
     (lambda d: _symlink(d / "link.md", _write(d / ".ssh" / "id.md", "k")), "hidden"),

@@ -365,11 +365,20 @@ def files_md(data: ProjectData, cap: int | None = None) -> str:
                 out.append(f"- Diff summary: {r['diffstat']}\n")
             if r.get("warning"):
                 out.append(f"- ⚠ {r['warning']}\n")
+    if data.attachments:
+        out.append("\n**Attachments** (copies kept in the user's ContextBridge memory on their Mac"
+                   + ("; included in this package under `attachments/`" if data.extra.get("attachments_included")
+                      else "; not included in this package") + "):\n\n")
+        for a in data.attachments:
+            size = f"{a['bytes'] / 1_000_000:.1f} MB" if a["bytes"] >= 100_000 else f"{max(1, a['bytes'] // 1000)} kB"
+            out.append(f"- {a['tag']} `{a['filename']}` ({a['mime']}, {size})"
+                       + (f" — {a['note']}" if a.get("note") else "")
+                       + (f" (relates to entry {a['entry_id']})" if a.get("entry_id") else "") + "\n")
     for f in data.file_refs:
         out.append(f"- `{f['path']}`: {f.get('purpose') or ''} (included: {'yes' if f['included_in_exports'] else 'no'}; "
                    f"required: {'yes' if f['required'] else 'no'})\n")
     if not out:
-        out.append("_No repository linked (`ctxb link <project> <dir>`) and no repo notes in Live State. "
+        out.append("_No attachments. No repository linked (`ctxb link <project> <dir>`) and no repo notes in Live State. "
                    "No files are included in this package._\n")
     return "".join(out)
 

@@ -29,7 +29,7 @@ _INJECTION = re.compile(
 
 
 def check_path(path: str | Path, home: Path, exports: Path, max_bytes: int,
-               allowed_roots: list[Path] | None = None) -> Path:
+               allowed_roots: list[Path] | None = None, allowed_ext: set[str] | frozenset[str] | None = None) -> Path:
     """Validate an import path. `allowed_roots` (MCP: model-chosen paths) restricts reads to those
     folders; None (CLI: a path the user typed) allows anywhere except hidden folders."""
     raw = Path(path).expanduser()
@@ -53,9 +53,10 @@ def check_path(path: str | Path, home: Path, exports: Path, max_bytes: int,
         raise CBError("invalid_input", f"{p} is a directory", "pass a file, or a ContextBridge package folder")
     if not p.is_file():
         raise CBError("invalid_input", f"{p} is not a regular file")
-    if p.suffix.lower() not in ALLOWED_EXT:
-        raise CBError("invalid_input", f"'{p.suffix or p.name}' files can't be imported",
-                      f"allowed: {', '.join(sorted(ALLOWED_EXT))}")
+    exts = ALLOWED_EXT if allowed_ext is None else allowed_ext
+    if p.suffix.lower() not in exts:
+        raise CBError("invalid_input", f"'{p.suffix or p.name}' files can't be used here",
+                      f"allowed: {', '.join(sorted(exts))}")
     size = p.stat().st_size
     if size > max_bytes:
         raise CBError("too_large", f"{p.name} is {size} bytes; the import limit is {max_bytes}",

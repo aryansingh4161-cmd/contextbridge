@@ -30,6 +30,9 @@ staging_ttl_hours = 24              # staged imports not committed by then are d
 # exports). Paths you pass to `ctxb import` yourself are not limited to these (hidden folders never).
 allowed_dirs = ["~/Desktop", "~/Documents", "~/Downloads"]
 
+[attachments]
+max_bytes = 50_000_000              # per attached file
+
 [handoff.budgets]
 quick = 3000
 standard = 10000

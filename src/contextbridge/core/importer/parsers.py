@@ -399,9 +399,20 @@ def parse_claude_export(path: Path, max_member_bytes: int) -> Parsed:
             if not text and isinstance(m.get("content"), list):
                 text = "\n".join(b.get("text", "") for b in m["content"] if isinstance(b, dict)
                                  and isinstance(b.get("text"), str))
-            if text.strip():
+            extra = []
+            for att in m.get("attachments") or []:  # files whose text the export includes: keep it word for word
+                if isinstance(att, dict):
+                    name = str(att.get("file_name") or "attachment")
+                    body = att.get("extracted_content")
+                    extra.append(f"[attached file: {name}]\n{body.strip()}" if isinstance(body, str) and body.strip()
+                                 else f"[attached file: {name} (no text in the export)]")
+            for fl in m.get("files") or []:  # e.g. images: only their names are in the export
+                if isinstance(fl, dict) and fl.get("file_name"):
+                    extra.append(f"[attached file: {fl['file_name']} (file itself not in the export)]")
+            if text.strip() or extra:
                 role = m.get("sender") or m.get("role") or "?"
-                lines.append(f"### {role} · {m.get('created_at', '')}\n\n{text.strip()}\n")
+                lines.append(f"### {role} · {m.get('created_at', '')}\n\n" + "\n\n".join(
+                    x for x in [text.strip(), *extra] if x) + "\n")
         name = str(c.get("name") or c.get("title") or "untitled")[:200]
         idx = len(p.candidates)
         p.candidates.append({"type": "conversation", "data": {

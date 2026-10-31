@@ -47,6 +47,7 @@ class ProjectData:
     writes_since_checkpoint: int = 0
     repo: dict[str, Any] | None = None
     extra: dict[str, Any] = field(default_factory=dict)
+    attachments: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def latest_session_id(self) -> int | None:
@@ -91,6 +92,9 @@ def collect(conn: sqlite3.Connection, project_id: int) -> ProjectData:
             writes_since_checkpoint=int(checkpoint_status(conn, project_id)["writes_since_checkpoint"]),
         )
         data.extra["entries_without_session"] = counts.get(None, 0)
+        data.attachments = [dict(r) | {"tag": f"[A-{r['id']:04d} · {r['provenance']} · {str(r['created_at'])[:10]}]"}
+                            for r in conn.execute("SELECT * FROM attachments WHERE project_id = ? ORDER BY id",
+                                                  (project_id,))]
     finally:
         conn.execute("COMMIT")
     return data

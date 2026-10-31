@@ -2,7 +2,7 @@
 
 _Generated from the server by `scripts/gen_tools_md.py`; a test fails if this file is out of date._
 
-12 tools, 3 prompts, 5 resources. Every project-scoped tool takes an explicit `project` slug and returns a `checkpoint_status` block. Errors come back as `isError: true` with a JSON body `{code, message, hint}`; codes: `not_found`, `invalid_input`, `conflict`, `provenance_violation`, `too_large`, `confirm_required`, `db_busy`, `internal`.
+13 tools, 3 prompts, 5 resources. Every project-scoped tool takes an explicit `project` slug and returns a `checkpoint_status` block. Errors come back as `isError: true` with a JSON body `{code, message, hint}`; codes: `not_found`, `invalid_input`, `conflict`, `provenance_violation`, `too_large`, `confirm_required`, `db_busy`, `internal`.
 
 ## Tools
 
@@ -69,6 +69,7 @@ Full-text search over this project's knowledge (and optionally its raw archive).
 | `kinds` | list of `requirement` \| `decision` \| `rejected_approach` \| `constraint` \| `preference` \| `fact` \| `explanation` \| `bug` \| `fix` \| `lesson` \| `milestone` \| `risk` \| `open_question` \| `reference` \| `convention` (optional) |  |  |
 | `include_superseded` | boolean |  | Default: `False`. |
 | `include_archive` | boolean |  | Default: `False`. |
+| `include_attachments` | boolean |  | Also search attached files (names, notes, text) Default: `True`. |
 | `limit` | integer |  | Default: `10`. |
 
 ### `resolve_conflict`
@@ -217,6 +218,7 @@ Prepare a handoff package when the user is switching accounts, apps or models, o
 | `profile` | string (optional) |  | Upload profile: claude_chat, claude_project, conservative (default) |
 | `format` | `md` \| `txt` (optional) |  | File extension; default from the profile |
 | `final_updates` | FinalUpdates (optional) |  |  |
+| `include_attachments` | boolean (optional) |  | Copy attached files into the package (default: only for knowledge_package) |
 
 <details><summary><code>EntryInput</code> fields</summary>
 
@@ -323,10 +325,21 @@ Delete an entry, a session, or a whole project, ONLY when the user explicitly as
 | Parameter | Type | Required | Notes |
 |---|---|---|---|
 | `project` | string | yes | Project slug (from list_projects) |
-| `target_type` | `entry` \| `session` \| `project` | yes |  |
+| `target_type` | `entry` \| `session` \| `project` \| `attachment` | yes |  |
 | `confirm` | boolean | yes | Must be true; only after the user agreed |
-| `target_id` | integer (optional) |  | Entry or session id (not for project) |
+| `target_id` | integer (optional) |  | Entry, session or attachment id (not for project) |
 | `confirm_project_name` | string (optional) |  | Exact project name (project only) |
+
+### `attach_file` (idempotent)
+
+Store a copy of a file (screenshot, image, PDF, document, text/code file) with the project, e.g. the screenshot of a bug or the spec PDF the user refers to. Use an absolute path to a file on this Mac (allowed folders: the user's Desktop, Documents, Downloads by default). Add a short note saying what it is and why it matters, and entry_id if it belongs to a specific decision/bug. You cannot attach an image that was only pasted into the chat: ask the user to save it to a file first. Handoffs list attachments.
+
+| Parameter | Type | Required | Notes |
+|---|---|---|---|
+| `project` | string | yes | Project slug (from list_projects) |
+| `path` | string | yes | Absolute path of the file |
+| `note` | string (optional) |  | What it is / why it matters |
+| `entry_id` | integer (optional) |  | Knowledge entry it belongs to |
 
 ## Prompts
 

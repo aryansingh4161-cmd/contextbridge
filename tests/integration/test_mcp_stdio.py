@@ -26,7 +26,8 @@ async def test_tools_listed_with_instructions(home: Path) -> None:
         tools = {t.name: t for t in (await c.list_tools()).tools}
         assert set(tools) == {"list_projects", "create_project", "remember", "search_memory",
                               "resolve_conflict", "update_state", "checkpoint", "get_context", "prepare_handoff",
-                              "import_context", "get_budget_status", "forget"}
+                              "import_context", "get_budget_status", "forget",
+                              "attach_file"}
         assert "name" in tools["create_project"].input_schema["required"]
         assert c.instructions and "explicit `project`" in c.instructions
 
@@ -204,3 +205,20 @@ async def test_import_context_stage_commit_over_stdio(home: Path) -> None:
         assert hit["topic_key"] == "cache.engine"
         r = await c.call_tool("import_context", {"project": "imp", "action": "commit"})
         assert r.is_error and "staging_id" in r.content[0].text  # type: ignore[union-attr]
+
+
+async def test_attach_file_over_stdio(home: Path, tmp_path: Path) -> None:
+    allowed = tmp_path / "docs"
+    allowed.mkdir()
+    (allowed / "spec.md").write_text("The quokka protocol uses port 7443.")
+    home.mkdir(parents=True)
+    (home / "config.toml").write_text(f"[import]\nallowed_dirs = ['{allowed}']\n")
+    async with Client(params(home)) as c:
+        await c.call_tool("create_project", {"name": "Att", "objective": "o", "slug": "att"})
+        r = await c.call_tool("attach_file", {"project": "att", "path": str(allowed / "spec.md"), "note": "the spec"})
+        assert not r.is_error and r.structured_content["stored"] is True  # type: ignore[index]
+        r = await c.call_tool("search_memory", {"project": "att", "query": "quokka"})
+        hits = r.structured_content["hits"]  # type: ignore[index]
+        assert hits and hits[0]["source"] == "attachment" and hits[0]["snippet"].startswith("<<<CONTEXTBRIDGE_IMPORTED")
+        r = await c.call_tool("attach_file", {"project": "att", "path": str(tmp_path / "x.md")})
+        assert r.is_error

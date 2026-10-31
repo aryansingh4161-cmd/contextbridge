@@ -105,6 +105,28 @@ Load my My App context and continue where I left off.
 Attach the handoff file Claude gave you (`01_START_HERE_handoff.md` or `.txt`) to the chat and say
 "continue from this".
 
+**Keeping files with a project** (screenshots, PDFs, documents)
+- Ask Claude: *"Attach ~/Desktop/login-bug.png to my-app: the error page after a wrong password."*
+- Or yourself: `ctxb attach my-app ~/Desktop/login-bug.png --note "error page after wrong password"`
+- See them: `ctxb attachments my-app`. Handoffs list them; a full package (`ctxb handoff my-app --mode
+  knowledge_package`) also includes copies.
+- An image you only *pasted* into a chat can't be saved automatically: save it to a file first.
+
+**Importing your old Claude chats word for word**
+1. On claude.ai: **Settings → Privacy → Export data**. You'll get an email with a download link.
+2. Download the `.zip`, then:
+   ```bash
+   ctxb import ~/Downloads/<the-export>.zip --type claude_export --project my-app
+   ```
+   This shows a numbered list of your conversations (nothing is saved yet).
+3. Keep only the ones that belong to this project, by name or by number:
+   ```bash
+   ctxb import-commit my-app <number shown> --match "my app"
+   ctxb import-commit my-app <number shown> --select 0,3,7
+   ```
+   The chats are stored word for word (including the text of files you attached in them) and can
+   be searched: *"Search my-app's archive for the pricing discussion."*
+
 ---
 
 ## Part 4 — The status line (Claude Code only)
@@ -138,6 +160,8 @@ Run in Terminal (or in Claude Code with `!` in front).
 | `ctxb doctor` | check that everything is healthy |
 | `ctxb export --full` | one backup file of everything (to move to another Mac) |
 | `ctxb import --full <file>` | restore that backup on the new Mac |
+| `ctxb attach my-app <file> --note "…"` | keep a copy of a screenshot, PDF or document |
+| `ctxb attachments my-app` | list the project's files |
 | `ctxb delete my-app --entry 12 --yes` | delete one saved item (can be undone) |
 
 You can also just ask Claude: *"What do you remember about the login flow?"*, *"Forget entry 12"*,

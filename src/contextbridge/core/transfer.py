@@ -60,6 +60,7 @@ TABLES: dict[str, dict[str, str]] = {
     "snapshots": {"project_id": "projects"},
     "raw_archive": {"project_id": "projects", "session_id": "sessions"},
     "file_refs": {"project_id": "projects"},  # display-only paths; never executed or read
+    "attachments": {"project_id": "projects", "session_id": "sessions", "entry_id": "entries"},
     "handoff_runs": {"project_id": "projects"},
 }
 # How each child table is selected for one project.
@@ -80,7 +81,8 @@ REDACT_COLUMNS: dict[str, tuple[str, ...]] = {
 }
 NULLABLE_FKS = {("entries", "session_id"), ("entries", "supersedes_id"), ("entries", "superseded_by_id"),
                 ("entry_history", "session_id"), ("live_state_history", "session_id"),
-                ("task_history", "session_id"), ("raw_archive", "session_id")}
+                ("task_history", "session_id"), ("raw_archive", "session_id"), ("attachments", "session_id"),
+                ("attachments", "entry_id")}
 ENTRY_REFS = ("id", "project_id", "session_id", "supersedes_id", "superseded_by_id")
 
 
@@ -128,7 +130,14 @@ def export_full(conn: sqlite3.Connection, paths: DataPaths, slugs: list[str] | N
             name = f"projects/{r['slug']}.json"
             members[name] = data
             counts = {t: n for t, n in ((t, len(v)) for t, v in json.loads(data)["tables"].items()) if n}
-            listing.append({"slug": r["slug"], "name": r["name"], "file": name,
+            files = []
+            for a in conn.execute("SELECT sha256, ext FROM attachments WHERE project_id = ?", (r["id"],)):
+                fp = paths.attachments / r["slug"] / f"{a['sha256']}.{a['ext']}"
+                if fp.exists():
+                    member = f"attachments/{r['slug']}/{a['sha256']}.{a['ext']}"
+                    members[member] = fp.read_bytes()
+                    files.append(member)
+            listing.append({"slug": r["slug"], "name": r["name"], "file": name, "attachment_files": files,
                             "sha256": hashlib.sha256(data).hexdigest(), "counts": counts})
         gm = [dict(r) for r in conn.execute("SELECT * FROM global_memory ORDER BY id")]
         members["global_memory.json"] = json.dumps(gm, ensure_ascii=False, sort_keys=True).encode("utf-8")
@@ -188,6 +197,14 @@ def read_archive(path: str | Path) -> tuple[dict[str, Any], dict[str, dict[str, 
             if hashlib.sha256(data).hexdigest() != item["sha256"]:
                 raise CBError("invalid_input", f"{item['file']} is corrupt (sha256 mismatch); nothing imported")
             dumps[item["slug"]] = json.loads(data)
+            blobs: dict[str, bytes] = {}
+            for member in item.get("attachment_files", []):
+                b = z.read(member)
+                sha, _, _ = Path(member).name.partition(".")
+                if hashlib.sha256(b).hexdigest() != sha:
+                    raise CBError("invalid_input", f"{member} is corrupt (sha256 mismatch); nothing imported")
+                blobs[sha] = b
+            dumps[item["slug"]]["_files"] = blobs
         gm_data = z.read(manifest["global_memory"]["file"])
         if hashlib.sha256(gm_data).hexdigest() != manifest["global_memory"]["sha256"]:
             raise CBError("invalid_input", "global_memory.json is corrupt (sha256 mismatch); nothing imported")
@@ -355,7 +372,7 @@ def _archive_text(row: dict[str, Any]) -> str:
 
 
 def import_dump(conn: sqlite3.Connection, dump: dict[str, Any], *, as_slug: str | None = None,
-                schema_version: int | None = None) -> dict[str, Any]:
+                schema_version: int | None = None, paths: DataPaths | None = None) -> dict[str, Any]:
     """Import one project dump in ONE transaction. Caller has taken the pre-import backup."""
     from .slug import SLUG_RE
 
@@ -395,6 +412,8 @@ def import_dump(conn: sqlite3.Connection, dump: dict[str, Any], *, as_slug: str 
                 if t == "raw_archive":
                     conn.execute("INSERT INTO archive_fts(rowid, title, text) VALUES (?,?,?)",
                                  (use["id"], use.get("title") or "", _archive_text(use)))
+                if t == "attachments":
+                    _restore_attachment(paths, slug, use, dump.get("_files", {}), conn)
             counts[t] = len(rows)
         bad = conn.execute("PRAGMA foreign_key_check").fetchall()
         if bad:
@@ -402,6 +421,29 @@ def import_dump(conn: sqlite3.Connection, dump: dict[str, Any], *, as_slug: str 
     remapped = {t: {o: n for o, n in m.items() if o != n} for t, m in maps.items()}
     return {"slug": slug, "counts": counts, "ids_preserved": not any(remapped.values()),
             "id_map": {t: m for t, m in remapped.items() if m}, "redactions": redactions[0]}
+
+
+def _restore_attachment(paths: DataPaths | None, slug: str, row: dict[str, Any], blobs: dict[str, bytes],
+                        conn: sqlite3.Connection) -> None:
+    """Write an imported attachment's file into the memory folder and re-index its text."""
+    from .attachments import TEXT_EXT, TEXT_INDEX_MAX
+
+    data = blobs.get(row["sha256"])
+    text = ""
+    if paths is not None and data is not None:
+        d = paths.attachments / slug
+        ensure_private_dir(paths.attachments)
+        ensure_private_dir(d)
+        dest = d / f"{row['sha256']}.{row['ext']}"
+        dest.write_bytes(data)
+        ensure_private_file(dest)
+        if row["ext"] in TEXT_EXT and len(data) <= TEXT_INDEX_MAX:
+            try:
+                text = redact(data.decode("utf-8"))[0]
+            except UnicodeDecodeError:
+                text = ""
+    conn.execute("INSERT INTO attachments_fts(rowid, filename, note, text) VALUES (?,?,?,?)",
+                 (row["id"], row.get("filename") or "", row.get("note") or "", text))
 
 
 def import_full(conn: sqlite3.Connection, paths: DataPaths, source: str | Path, *,
@@ -428,7 +470,8 @@ def import_full(conn: sqlite3.Connection, paths: DataPaths, source: str | Path, 
     backup = backup_db(conn, paths, "pre-import")
     results = []
     for d in dumps.values():
-        results.append(import_dump(conn, d, as_slug=as_slug, schema_version=int(manifest.get("schema_version", 1))))
+        results.append(import_dump(conn, d, as_slug=as_slug, schema_version=int(manifest.get("schema_version", 1)),
+                                   paths=paths))
     gm_added = _import_global(conn, gm)
     return {"imported": results, "global_memory_added": gm_added, "backup": str(backup)}
 

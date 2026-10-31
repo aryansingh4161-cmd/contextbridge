@@ -25,6 +25,7 @@ folder every time, never overwritten).
 | `02_companion_files.<ext>` | 02–06 consolidated | only when the profile's `max_files` would be exceeded |
 | `NN_name.partK.<ext>` | a part of a split file | split at `#`/`##` (then `###`) headings, never inside a code fence |
 | `source_references.json` | sidecar | not for upload; for re-import |
+| `attachments/A-<id>_<name>` | attachment | copies of the project's attached files; included by default only in `knowledge_package` (`--with-attachments` / `include_attachments` to choose). Manifest role `attachment`, with sha256 and mime |
 
 `<ext>` comes from the upload profile's `preferred_ext` (`txt` for `claude_chat` / `claude_project`, because
 `.md` is not in Claude's documented upload types) or `format`. The content is Markdown either way.
@@ -91,6 +92,8 @@ against `source_sha256` (byte for byte).
   "snapshots": […], "raw_archive": […], "file_refs": […], "handoff_runs": […]}}` — rows exactly as in the
   database; BLOB columns as `{"$b64": "…"}`.
 - `global_memory.json`: rows of `global_memory`.
+- `attachments/<slug>/<sha256>.<ext>`: the attached files' bytes, listed per project in the manifest
+  (`attachment_files`); verified against their sha256 (the file name) on import.
 
 Import rules: every member's sha256 is checked before anything is written; a newer `schema_version`
 than the installed one is refused; a pre-import backup of the DB is taken; each project imports in one

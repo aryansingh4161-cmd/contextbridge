@@ -21,7 +21,7 @@ from .errors import CBError
 from .paths import DataPaths, ensure_private_dir
 from .snapshots import create_snapshot_tx
 
-TargetType = Literal["entry", "session", "project"]
+TargetType = Literal["entry", "session", "project", "attachment"]
 
 
 def _secure(conn: sqlite3.Connection) -> None:
@@ -68,6 +68,12 @@ def forget(conn: sqlite3.Connection, paths: DataPaths, project_id: int, target_t
             conn.execute("DELETE FROM sessions WHERE id = ?", (target_id,))  # checkpoints cascade; entries keep, unlinked
         return {"deleted": {"session": target_id, "checkpoints": n_cp, "archived_transcripts": archives},
                 "kept": "knowledge entries saved during the session (now unlinked from it)", "snapshot_id": snap}
+    if target_type == "attachment":
+        if target_id is None:
+            raise CBError("invalid_input", "target_id (the attachment id) is required")
+        from .attachments import remove
+        return remove(conn, paths, project_id, target_id) | {
+            "note": "the file copy was deleted from the memory folder (your original file is untouched)"}
     if target_type == "project":
         name = conn.execute("SELECT name, slug FROM projects WHERE id = ?", (project_id,)).fetchone()
         if confirm_project_name is None or confirm_project_name.strip() != name["name"]:
@@ -80,13 +86,27 @@ def forget(conn: sqlite3.Connection, paths: DataPaths, project_id: int, target_t
         archive = export_full(conn, paths, [name["slug"]], paths.backups / "deleted-projects")
         with write_tx(conn):
             _drop_archives(conn, "project_id = ?", (project_id,))
+            _drop_attachment_index(conn, project_id)
             conn.execute("DELETE FROM staging WHERE project_id = ?", (project_id,))
             conn.execute("DELETE FROM telemetry WHERE project_id = ?", (project_id,))
             conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))  # everything else cascades
+        _remove_tree(paths.attachments / name["slug"])
         return {"deleted": {"project": name["slug"]}, "recovery_archive": archive["path"],
                 "undo": f"ctxb import --full {archive['path']}",
                 "note": "a recovery archive was kept in backups/deleted-projects; `ctxb purge` removes all traces"}
-    raise CBError("invalid_input", f"target_type '{target_type}' is invalid", "entry, session or project")
+    raise CBError("invalid_input", f"target_type '{target_type}' is invalid", "entry, session, project or attachment")
+
+
+def _drop_attachment_index(conn: sqlite3.Connection, project_id: int) -> None:
+    for (aid,) in conn.execute("SELECT id FROM attachments WHERE project_id = ?", (project_id,)).fetchall():
+        conn.execute("DELETE FROM attachments_fts WHERE rowid = ?", (aid,))
+
+
+def _remove_tree(d: Path) -> bool:
+    if d.is_dir() and not d.is_symlink():
+        shutil.rmtree(d)
+        return True
+    return False
 
 
 def purge(conn: sqlite3.Connection, paths: DataPaths, slug: str) -> dict[str, Any]:
@@ -105,15 +125,14 @@ def purge(conn: sqlite3.Connection, paths: DataPaths, slug: str) -> dict[str, An
     if row is not None:
         with write_tx(conn):
             _drop_archives(conn, "project_id = ?", (row["id"],))
+            _drop_attachment_index(conn, row["id"])
             conn.execute("DELETE FROM staging WHERE project_id = ?", (row["id"],))
             conn.execute("DELETE FROM telemetry WHERE project_id = ?", (row["id"],))
             conn.execute("DELETE FROM projects WHERE id = ?", (row["id"],))
         out["db_rows"] = True
     conn.execute("VACUUM")
-    exp = paths.exports / slug
-    if exp.is_dir() and not exp.is_symlink():
-        shutil.rmtree(exp)
-        out["exports_removed"] = True
+    out["exports_removed"] = _remove_tree(paths.exports / slug)
+    out["attachments_removed"] = _remove_tree(paths.attachments / slug)
     deleted = paths.backups / "deleted-projects"
     if deleted.is_dir():
         for z in deleted.glob("*.zip"):
@@ -142,6 +161,10 @@ def _purge_backup(path: Path, slug: str) -> int:
         ids = [x[0] for x in bc.execute("SELECT id FROM raw_archive WHERE project_id = ?", (pid,))]
         for i in ids:
             bc.execute("DELETE FROM archive_fts WHERE rowid = ?", (i,))
+        has_att = bc.execute("SELECT 1 FROM sqlite_master WHERE name = 'attachments'").fetchone()
+        if has_att:  # older backups predate the attachments table
+            for (aid,) in bc.execute("SELECT id FROM attachments WHERE project_id = ?", (pid,)).fetchall():
+                bc.execute("DELETE FROM attachments_fts WHERE rowid = ?", (aid,))
         for t in ("raw_archive", "staging", "telemetry"):
             bc.execute(f"DELETE FROM {t} WHERE project_id = ?", (pid,))
         bc.execute("DELETE FROM projects WHERE id = ?", (pid,))
