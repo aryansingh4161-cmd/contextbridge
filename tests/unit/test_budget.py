@@ -182,6 +182,9 @@ def test_feasibility_acts_before_percentages(app: App, linked: tuple[int, Path])
     assert a["level"] >= 85 and "feasibility" in str(a["budget"])
     a = assess({"ts": r.ts, "context_used_pct": 30.0, "context_window_tokens": 1_000_000})
     assert a["level"] == 0 and a["feasible"] is True
+    assert a["est_handoff_cost"]["required"] <= 23_000, "reserve is capped: a 1M window doesn't mean a 100k handoff"
+    a = assess({"ts": r.ts, "context_used_pct": 98.5, "context_window_tokens": 1_000_000})  # 15k left < 23k + 3k
+    assert a["feasible"] is False and a["recommended_mode"] == "quick"
 
 
 def test_checkpoint_status_uses_fresh_telemetry(app: App, linked: tuple[int, Path]) -> None:

@@ -20,6 +20,7 @@ from .db.connection import now_iso, write_tx
 LEVELS = (70, 80, 85, 90, 95)
 THROTTLE_S = 15
 FINAL_REVIEW, TOOL_CALL, RESPONSE, NEXT_OP = 1500, 500, 500, 3000
+RESERVE_CAP = 20_000
 LEVEL_ACTION = {
     70: "warn",
     80: "sync unsaved decisions and state now (remember / update_state)",
@@ -117,7 +118,9 @@ def _window_expired(reset_at: int | None) -> bool:
 
 def handoff_cost(window: int | None) -> dict[str, int]:
     """Tokens the MODEL needs to finish a handoff. Small by design (P3: the server assembles it)."""
-    reserve = int((window or 200_000) * 0.10)
+    # safety margin: 10 % of the window, capped, so a very large window doesn't inflate the cost of what is a
+    # small job for the model (the server assembles the package; P3). Found in real use with a 1M window.
+    reserve = min(int((window or 200_000) * 0.10), RESERVE_CAP)
     required = FINAL_REVIEW + 2 * TOOL_CALL + RESPONSE + reserve
     return {"required": required, "low": int(required * 0.8), "high": int(required * 1.3), "reserve": reserve}
 
