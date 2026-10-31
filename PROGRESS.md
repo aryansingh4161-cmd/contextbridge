@@ -2,7 +2,7 @@
 
 Resume from this file alone. Spec: `docs/SPEC.md` (copy of `../ContextBridge_ClaudeCode_Prompt.md`). Blueprint: `docs/BLUEPRINT.md`. Acceptance map: `docs/ACCEPTANCE.md`.
 
-**Current state (2026-10-31):** **MVP complete: M0–M9 done.** 215/215 tests pass (unit, integration over real stdio, acceptance incl. SIGKILL tests), mypy --strict clean. 12 MCP tools + 3 prompts + 5 resources. All 24 acceptance tests mapped and passing (`docs/ACCEPTANCE.md`). Installed on the user's Mac (Claude Code: MCP + hooks + status line; Claude Desktop) — **the installed copy predates M9**; update with `uv tool install --reinstall <repo>`. Code: https://github.com/aryansingh4161-cmd/contextbridge (public, MIT, branch `main`). Open items: see *Known issues / open items* at the end.
+**Current state (2026-10-31):** **MVP complete: M0–M9 done.** 215/215 tests pass (unit, integration over real stdio, acceptance incl. SIGKILL tests), mypy --strict clean. 12 MCP tools + 3 prompts + 5 resources. All 24 acceptance tests mapped and passing (`docs/ACCEPTANCE.md`). Installed on the user's Mac (Claude Code: MCP + hooks + status line; Claude Desktop) (updated to the M9 version by the user on 2026-10-31). Code: https://github.com/aryansingh4161-cmd/contextbridge (public, MIT, branch `main`). Open items: see *Known issues / open items* at the end.
 
 | Milestone | Status | Verified how | Notes |
 |---|---|---|---|
@@ -174,7 +174,7 @@ Resume from this file alone. Spec: `docs/SPEC.md` (copy of `../ContextBridge_Cla
 - 2026-10-31: Live State from an import never overwrites existing sections unless an edit says `replace: true`.
 
 ## Known issues / open items
-- **Installed copy is older than M9** (no `forget` tool, older splitter). Update: `cd "<repo>" && uv tool install --reinstall .` (the Claude configs don't need to change).
+- After code changes, update the installed copy with `cd "<repo>" && uv tool install --reinstall .` (the Claude configs don't need to change).
 - **Not verified with a real file: the Claude data export format** (`claude_export` parser is tolerant and refuses unknown shapes). Needs a real export from claude.ai → Settings → Privacy → Export data.
 - **Not tested: Claude Desktop config surviving a Claude account switch** (expected yes: it's a local file). Deferred by the user.
 - **iCloud Desktop sync** sets the macOS `hidden` flag on the editable-install `.pth` file and Python 3.14 skips hidden `.pth` files → `ModuleNotFoundError`. Fix: venv lives in `.venv.nosync/` (iCloud ignores `*.nosync`) with `.venv` symlinked to it; pytest also sets `pythonpath = ["src", "tests"]`. If you recreate the venv, keep this layout. Real installs use `uv tool install`, outside Desktop.
