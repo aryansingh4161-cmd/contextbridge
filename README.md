@@ -46,13 +46,14 @@ ctxb install-claude-desktop     # Claude Desktop: then quit (⌘Q) and reopen it
 
 Then ask Claude: *"Create a ContextBridge project called My App: …"*, work as usual, and when you
 switch: *"Prepare a complete handoff, I'm switching accounts."* In a fresh chat: *"Load my My App
-context and continue where I left off."* Full guide: **[docs/INSTALL.md](docs/INSTALL.md)**.
+context and continue where I left off."* New user? Start with the **[User Manual](docs/USER_MANUAL.md)** (step by step). Full install details: [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Documentation
 
 | | |
 |---|---|
-| [INSTALL.md](docs/INSTALL.md) | Step-by-step setup for macOS, connecting clients, uninstalling |
+| [USER_MANUAL.md](docs/USER_MANUAL.md) | Step-by-step manual for new users: install, start a project, daily use |
+| [INSTALL.md](docs/INSTALL.md) | Detailed setup for macOS, connecting clients, uninstalling |
 | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Symptoms → causes → fixes |
 | [TOOLS.md](docs/TOOLS.md) | Every MCP tool, prompt and resource (generated from the server) |
 | [FORMAT.md](docs/FORMAT.md) | Handoff package and migration archive format (v1) |
