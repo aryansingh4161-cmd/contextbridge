@@ -69,34 +69,88 @@ def _scan_text(text: str, *, entropy: bool) -> bool:
     return bool(redact(text, entropy=entropy)[1])
 
 
-def _inner_texts(data: bytes, ext: str) -> list[bytes] | None:
-    """Text hidden inside containers: ZIP members (Office/iWork) and Flate streams (PDF).
-    Returns None when a container can't be inspected (corrupt, too large)."""
+MAX_DEPTH = 3
+IMAGE_FILTERS = (b"DCTDecode", b"JPXDecode", b"CCITTFaxDecode", b"JBIG2Decode")
+_STREAM_KW = re.compile(rb"\bstream\r?\n")
+_FILTER = re.compile(rb"/Filter\s*(\[[^\]]*\]|/[A-Za-z0-9]+)")
+
+
+def _is_zip(data: bytes) -> bool:
+    import io
+    import zipfile
+    return data[:4] == b"PK\x03\x04" or zipfile.is_zipfile(io.BytesIO(data))  # EOCD anywhere, not just offset 0
+
+
+def _inner_texts(data: bytes, ext: str, depth: int = 0, budget: list[int] | None = None) -> list[bytes] | None:
+    """Every piece of text hidden inside containers — ZIP members (Office/iWork, recursively) and PDF
+    streams — or None when ANY part can't be inspected (corrupt, too large, too deeply nested, a PDF filter
+    other than plain FlateDecode, a stream we can't delimit). None means "can't vouch for it"."""
     import io
     import zipfile
     import zlib
 
-    if ext in ZIP_EXT or data[:4] == b"PK\x03\x04":
+    budget = budget if budget is not None else [INSPECT_MAX]
+    if depth > MAX_DEPTH:
+        return None
+    if ext in ZIP_EXT or _is_zip(data):
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as z:
-                infos = z.infolist()
-                if sum(i.file_size for i in infos) > INSPECT_MAX or len(infos) > 5000:
+                infos = [i for i in z.infolist() if not i.is_dir()]
+                if len(infos) > 5000:
                     return None
-                return [z.read(i) for i in infos if not i.is_dir()]
-        except (zipfile.BadZipFile, OSError, RuntimeError, NotImplementedError):
+                out: list[bytes] = []
+                for i in infos:
+                    budget[0] -= i.file_size
+                    if budget[0] < 0:
+                        return None
+                    member = z.read(i)
+                    out.append(member)
+                    if _is_zip(member) or member[:5] == b"%PDF-":
+                        nested = _inner_texts(member, Path(i.filename).suffix.lower().lstrip("."), depth + 1, budget)
+                        if nested is None:
+                            return None
+                        out += nested
+                return out
+        except (zipfile.BadZipFile, OSError, RuntimeError, NotImplementedError, ValueError):
             return None
     if ext == "pdf" or data[:5] == b"%PDF-":
-        out, total = [], 0
-        for m in _PDF_STREAM.finditer(data):
+        if b"/Font" in data:
+            # Text in real PDFs is stored as font glyph codes (verified with a CoreGraphics-made PDF: a key on
+            # the page was not visible in the decoded streams). Without a full text extractor we can't vouch.
+            return None
+        matches = list(_PDF_STREAM.finditer(data))
+        if len(matches) != len(_STREAM_KW.findall(data)):
+            return None  # a stream we can't delimit
+        out = []
+        for m in matches:
+            head = data[max(0, m.start() - 2048):m.start()]
+            dict_start = head.rfind(b"<<")
+            filters = _FILTER.findall(head[dict_start:] if dict_start >= 0 else head)
+            names = re.findall(rb"/([A-Za-z0-9]+)", filters[-1]) if filters else []
             raw = m.group(1)
-            try:
-                inflated = zlib.decompressobj().decompress(raw, INSPECT_MAX - total)
-            except zlib.error:
-                inflated = raw  # not Flate-compressed: scan as is
-            total += len(inflated)
-            out.append(inflated)
-            if total >= INSPECT_MAX:
+            if not names:
+                inflated = raw
+            elif names == [b"FlateDecode"]:
+                try:
+                    d = zlib.decompressobj()
+                    inflated = d.decompress(raw, max(budget[0], 1))
+                    if d.unconsumed_tail:
+                        return None  # over budget
+                except zlib.error:
+                    return None
+            elif names[-1] in IMAGE_FILTERS and all(n in (b"FlateDecode", *IMAGE_FILTERS) for n in names):
+                continue  # image data (JPEG/JPEG2000/fax/JBIG2): no readable text to hide a secret in
+            else:
+                return None  # text-capable filters we don't decode (LZW, ASCII85, chains…): can't vouch
+            budget[0] -= len(inflated)
+            if budget[0] < 0:
                 return None
+            out.append(inflated)
+            if _is_zip(inflated) or inflated[:5] == b"%PDF-":
+                nested = _inner_texts(inflated, "", depth + 1, budget)
+                if nested is None:
+                    return None
+                out += nested
         return out
     return []
 
@@ -144,7 +198,7 @@ def add(conn: sqlite3.Connection, paths: DataPaths, config: Config, project_id: 
     if PEM_PRIVATE.search(data):
         raise CBError("invalid_input", f"{src.name} contains a private key; it can't be attached",
                       "keys don't belong in project memory")
-    if restrict and has_secrets(data, ext, fail_closed=True):
+    if restrict and has_secrets(data, ext):
         raise CBError("invalid_input", f"{src.name} appears to contain secrets (API keys, tokens, passwords); "
                       "the AI can't attach it", "remove the secrets, or attach it yourself with `ctxb attach` "
                       "(the stored copy would keep them)")
@@ -176,6 +230,7 @@ def add(conn: sqlite3.Connection, paths: DataPaths, config: Config, project_id: 
             redactions = sum(f.count for f in found)
         except UnicodeDecodeError:
             text = ""
+    inspectable = _inner_texts(data, ext) is not None
     mime = mimetypes.guess_type(src.name)[0] or "application/octet-stream"
     filename = redact(src.name)[0][:300]
     try:
@@ -193,6 +248,10 @@ def add(conn: sqlite3.Connection, paths: DataPaths, config: Config, project_id: 
         raise
     out: dict[str, Any] = {"attachment_id": aid, "stored": True, "filename": filename, "bytes": len(data),
                            "mime": mime, "searchable": "full text" if text else "name and note"}
+    if restrict and not inspectable:
+        out["note"] = ("this file's contents can't be fully checked for secrets (e.g. text inside a PDF), so it stays "
+                       "on this Mac and is only listed in handoffs; to include it in packages, the user can attach it "
+                       "themselves with `ctxb attach`")
     if redactions:
         out["text_redactions"] = redactions
         out["warning"] = ("the file contains what looks like secrets; they were redacted in the search index, but "

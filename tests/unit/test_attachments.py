@@ -294,6 +294,31 @@ def test_secret_scan_is_content_based_and_fails_closed() -> None:
     pdf = b"%PDF-1.4\n1 0 obj\n<< /Filter /FlateDecode >>\nstream\n" + zlib.compress(b"token " + key) \
         + b"\nendstream\nendobj\n%%EOF"
     assert att.has_secrets(pdf, "pdf")
+    # PDFs with fonts hold text as glyph codes we can't read → can't vouch (fail closed only where required)
+    font_pdf = b"%PDF-1.4\n1 0 obj\n<< /Type /Font /Subtype /TrueType >>\nendobj\n%%EOF"
+    assert att.has_secrets(font_pdf, "pdf", fail_closed=True) and not att.has_secrets(font_pdf, "pdf")
+    # other text-capable filters can't be vouched for; image-only filters are fine
+    lzw = b"%PDF-1.4\n<< /Filter /LZWDecode >>\nstream\nxxxx\nendstream\n%%EOF"
+    assert att.has_secrets(lzw, "pdf", fail_closed=True)
+    jpg = b"%PDF-1.4\n<< /Filter /DCTDecode >>\nstream\n\xff\xd8\xff\nendstream\n%%EOF"
+    assert not att.has_secrets(jpg, "pdf", fail_closed=True)
+    # nested archives are opened; too-deep nesting can't be vouched for
+    inner = io.BytesIO()
+    with zipfile.ZipFile(inner, "w") as z:
+        z.writestr("creds.txt", b"KEY=" + key)
+    outer = io.BytesIO()
+    with zipfile.ZipFile(outer, "w") as z:
+        z.writestr("word/embeddings/pkg.zip", inner.getvalue())
+    assert att.has_secrets(outer.getvalue(), "docx")
+    deep = b"just text"
+    for _ in range(6):
+        b = io.BytesIO()
+        with zipfile.ZipFile(b, "w") as z:
+            z.writestr("x.zip", deep)
+        deep = b.getvalue()
+    assert att.has_secrets(deep, "docx", fail_closed=True)
+    # ZIP data not at offset 0 is still detected as a ZIP
+    assert att.has_secrets(b"junk prefix" + outer.getvalue(), "docx")
     # a container that can't be inspected is risky only where we must fail closed
     assert att.has_secrets(b"PK\x03\x04garbage", "docx", fail_closed=True)
     assert not att.has_secrets(b"PK\x03\x04garbage", "docx", fail_closed=False)
@@ -303,3 +328,24 @@ def test_secret_scan_is_content_based_and_fails_closed() -> None:
     with zipfile.ZipFile(clean, "w") as z:
         z.writestr("word/document.xml", "<w:t>Quarterly plan</w:t>")
     assert not att.has_secrets(clean.getvalue(), "docx", fail_closed=True)
+
+
+
+def test_ai_attached_uninspectable_files_stay_out_of_packages(home: Path, tmp_path: Path) -> None:
+    home.mkdir(parents=True)
+    ok = tmp_path / "ok"
+    ok.mkdir()
+    (home / "config.toml").write_text(f"[import]\nallowed_dirs = ['{ok}']\n")
+    app = open_app(home, log_to_stderr=False)
+    try:
+        pid = _pid(app)
+        pdf = b"%PDF-1.4\n1 0 obj\n<< /Type /Font >>\nendobj\n%%EOF"
+        by_ai = att.add(app.conn, app.paths, app.config, pid, _file(ok, "spec.pdf", pdf), provenance="user_confirmed")
+        assert by_ai["stored"] and "can't be fully checked" in by_ai["note"]
+        att.add(app.conn, app.paths, app.config, pid, _file(ok, "mine.pdf", pdf + b" "), restrict=False)  # user
+        kp = prepare_handoff(app.conn, app.paths, app.config, pid, mode="knowledge_package")
+        names = {p.name for p in (Path(kp["directory"]) / "attachments").iterdir()}
+        assert names == {"A-0002_mine.pdf"}, names
+        assert any("spec.pdf" in w and "attach it yourself" in w for w in kp["warnings"])
+    finally:
+        app.close()

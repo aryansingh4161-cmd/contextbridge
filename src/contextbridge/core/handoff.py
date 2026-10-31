@@ -318,9 +318,14 @@ def _copy_attachments(paths: DataPaths, data: ProjectData, out_dir: Path, prof: 
         if not src.exists():
             warnings.append(f"attachment {a['tag']} '{a['filename']}' is missing from the memory folder")
             continue
-        if has_secrets(src.read_bytes(), a["ext"], fail_closed=True):
-            warnings.append(f"attachment {a['tag']} '{a['filename']}' contains what look like secrets; it was NOT "
-                            "copied into the package (it stays listed)")
+        # files the USER attached are included unless secrets are detected; files the AI attached must also be
+        # fully inspectable (fail closed), since packages are what leaves the Mac
+        by_user = a["provenance"] == "user_stated"
+        if has_secrets(src.read_bytes(), a["ext"], fail_closed=not by_user):
+            warnings.append(f"attachment {a['tag']} '{a['filename']}' was NOT copied into the package: "
+                            + ("it contains what look like secrets" if by_user else
+                               "it contains what look like secrets, or its contents can't be fully checked; attach "
+                               "it yourself with `ctxb attach` to include it") + " (it stays listed)")
             continue
         name = f"A-{a['id']:04d}_{re.sub(r'[^A-Za-z0-9._-]', '_', a['filename'])[:120]}"
         dest = d / name
