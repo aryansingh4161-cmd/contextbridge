@@ -35,11 +35,22 @@ def checkpoint_status(conn: sqlite3.Connection, project_id: int) -> dict[str, An
         rec = "call checkpoint"
     else:
         rec = "none"
+    from .budget import assess, latest
+
+    budget = assess(latest(conn, project_id=project_id))
+    telemetry = "unavailable"
+    if budget["telemetry"] == "available" and not budget["stale"]:
+        telemetry = "available"
+        if budget["level"] >= 90:
+            rec = "prepare handoff"
+        elif budget["level"] >= 85 or (budget["level"] >= 80 and writes):
+            rec = "call checkpoint"
     return {
         "last_checkpoint_at": last,
         "minutes_since_checkpoint": minutes,
         "writes_since_checkpoint": writes,
         "unsaved_hint": ("no checkpoint yet" if last is None else f"unsaved since {last}") if writes else None,
         "recommendation": rec,
-        "telemetry": "unavailable",  # filled by the budget monitor (M8) where a client provides it
+        "telemetry": telemetry,  # "available" only with a fresh client reading (Claude Code status line)
+        **({"budget_level": budget["level"], "budget": budget["budget"]} if telemetry == "available" else {}),
     }

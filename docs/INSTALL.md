@@ -53,7 +53,13 @@ This does two things, and backs up each file it touches first (into `~/.contextb
 2. Adds a **SessionStart hook** to `~/.claude/settings.json`. When you start Claude Code in a folder
    that you've linked to a project (step 5), the hook loads that project's brief context
    automatically. In other folders it does nothing. Your existing settings and hooks are kept.
-   Use `--no-hook` to skip this part.
+   It also adds the **budget monitor**: a status line at the bottom of Claude Code
+   (`ctx 72% · 5h 41% · 7d 63% · ckpt 12m ago · handoff ✓ · my-app`), a Stop hook that asks Claude
+   to save once per threshold (80 % sync, 85 % checkpoint, 90 % suggest a handoff, 95 % emergency),
+   a PreCompact hook that archives the conversation before Claude Code compacts it, and
+   SessionEnd/StopFailure hooks that write an emergency handoff if the session ends with unsaved
+   work or hits a usage limit. If you already have a status line, it's kept (`--force-statusline`
+   to replace it). Use `--no-hook` to skip all hooks, `--no-statusline` for just the status line.
 
 Check: run `claude mcp list` — you should see `contextbridge: … ✓ Connected`.
 

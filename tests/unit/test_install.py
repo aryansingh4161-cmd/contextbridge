@@ -94,6 +94,7 @@ def test_desktop_refuses_invalid_json(fake_home: Path) -> None:
 
 
 def test_code_install_uses_verified_command_and_merges_hook(fake_home: Path, tmp_path: Path) -> None:
+    import shlex
     sp = claude_settings_path()
     sp.parent.mkdir(parents=True)
     other = {"hooks": [{"type": "command", "command": "echo hi"}]}
@@ -101,25 +102,41 @@ def test_code_install_uses_verified_command_and_merges_hook(fake_home: Path, tmp
                                                           "PreToolUse": [{"matcher": "Bash", "hooks": []}]}}))
     paths = resolve_paths(fake_home / ".contextbridge")
     ctxb = tmp_path / "it's here" / "ctxb"
+    q = shlex.quote(str(ctxb))
     out = install_code(paths, command=CMD, ctxb=ctxb)
     log = (tmp_path / "claude.log").read_text().splitlines()
     assert f"mcp add --transport stdio --scope user contextbridge -- {CMD}" in log
-    assert out["mcp"].startswith("added") and out["hook"]["status"] == "added"
+    assert out["mcp"].startswith("added") and out["hooks"]["status"] == "updated"
     s = json.loads(sp.read_text())
     assert s["model"] == "opus" and s["hooks"]["PreToolUse"] == [{"matcher": "Bash", "hooks": []}]
     assert s["hooks"]["SessionStart"][0] == other
-    ours = s["hooks"]["SessionStart"][1]["hooks"][0]
-    assert ours["type"] == "command" and ours["timeout"] == 10
-    import shlex
-    assert ours["command"] == f"{shlex.quote(str(ctxb))} hook session-start", "shell-quoted (path has an apostrophe)"
-    assert subprocess.run(["sh", "-c", f"printf %s {shlex.quote(str(ctxb))}"], capture_output=True,
-                          text=True).stdout == str(ctxb)
+    for event, sub, timeout in [("SessionStart", "session-start", 10), ("Stop", "stop", 10),
+                                ("PreCompact", "pre-compact", 30), ("SessionEnd", "session-end", 5),
+                                ("StopFailure", "stop-failure", 5)]:
+        ours = s["hooks"][event][-1]["hooks"][0]
+        assert ours == {"type": "command", "command": f"{q} hook {sub}", "timeout": timeout}, event
+    assert s["statusLine"] == {"type": "command", "command": f"{q} statusline", "padding": 0}
+    assert subprocess.run(["sh", "-c", f"printf %s {q}"], capture_output=True, text=True).stdout == str(ctxb)
     again = install_code(paths, command=CMD, ctxb=ctxb)
-    assert again["mcp"].startswith("already") and again["hook"]["status"] == "already configured"
+    assert again["mcp"].startswith("already") and again["hooks"]["status"] == "already configured"
     install_code(paths, uninstall=True)
     s = json.loads(sp.read_text())
-    assert s["hooks"]["SessionStart"] == [other]
+    assert s["hooks"] == {"SessionStart": [other], "PreToolUse": [{"matcher": "Bash", "hooks": []}]}
+    assert "statusLine" not in s and s["model"] == "opus"
     assert "mcp remove contextbridge --scope user" in (tmp_path / "claude.log").read_text()
+
+
+def test_existing_status_line_is_kept(fake_home: Path, tmp_path: Path) -> None:
+    sp = claude_settings_path()
+    sp.parent.mkdir(parents=True)
+    mine = {"type": "command", "command": "~/.claude/my-statusline.sh"}
+    sp.write_text(json.dumps({"statusLine": mine}))
+    paths = resolve_paths(fake_home / ".contextbridge")
+    out = install_code(paths, command=CMD, ctxb=tmp_path / "ctxb")
+    assert "kept yours" in out["hooks"]["statusline"]
+    assert json.loads(sp.read_text())["statusLine"] == mine
+    install_code(paths, uninstall=True)
+    assert json.loads(sp.read_text())["statusLine"] == mine
 
 
 def _linked_project(app: App, d: Path) -> int:

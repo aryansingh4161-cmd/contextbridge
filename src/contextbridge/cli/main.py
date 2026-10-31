@@ -509,23 +509,121 @@ def cmd_install_code(args: argparse.Namespace) -> int:
 
     paths = resolve_paths(args.home)
     ensure_layout(paths)
-    _print_install(install_code(paths, uninstall=args.uninstall, dry_run=args.dry_run, hook=not args.no_hook),
+    _print_install(install_code(paths, uninstall=args.uninstall, dry_run=args.dry_run, hook=not args.no_hook,
+                                statusline=not args.no_statusline, force_statusline=args.force_statusline),
                    args.json)
     return EXIT_OK
 
 
 def cmd_hook(args: argparse.Namespace) -> int:
     """Claude Code hook entry point. Never fails the session: errors print nothing and exit 0."""
-    if args.event != "session-start":
-        return EXIT_OK
     try:
-        from ..adapters.claude_code.hooks import session_start
+        from ..adapters.claude_code import hooks as h
 
-        text = session_start(sys.stdin.read(), args.home)
+        data = sys.stdin.read()
+        if args.event == "session-start":
+            text = h.session_start(data, args.home)
+        elif args.event == "stop":
+            text = h.stop(data, args.home)
+        elif args.event == "pre-compact":
+            text = h.pre_compact(data, args.home)
+        else:
+            text = h.spawn_emergency(data, args.home, args.event)
         if text:
             sys.stdout.write(text + "\n")
     except Exception as exc:  # noqa: BLE001 (a hook must never break the session)
         print(f"contextbridge hook skipped: {type(exc).__name__}", file=sys.stderr)
+    return EXIT_OK
+
+
+def cmd_statusline(args: argparse.Namespace) -> int:
+    """Claude Code status line: record a reading and print one line. Never fails loudly."""
+    try:
+        from ..adapters.claude_code.hooks import statusline
+
+        line = statusline(sys.stdin.read(), args.home)
+    except Exception as exc:  # noqa: BLE001
+        line = f"ContextBridge: – ({type(exc).__name__})"
+    print(line)
+    return EXIT_OK
+
+
+def cmd_emergency(args: argparse.Namespace) -> int:
+    from ..core.emergency import emergency
+
+    app, pid = _project_app(args)
+    try:
+        out = emergency(app.conn, app.paths, app.config, pid, transcript=args.transcript, reason=args.reason,
+                        only_if_unsaved=args.only_if_unsaved, session_key=args.session, restrict=False)
+    finally:
+        app.close()
+    if out.get("handoff"):
+        print(f"Emergency handoff written: {out['handoff']}")
+    else:
+        print(f"No handoff written: {out.get('skipped_handoff', 'see log')}")
+    if out.get("archived"):
+        print(f"Transcript: {'archived' if out['archived'].get('stored') else 'already archived'}")
+    if out.get("archive_error"):
+        print(f"! transcript not archived: {out['archive_error']}")
+    return EXIT_OK
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    from ..core.app import open_app
+    from ..core.budget import budget_status
+    from ..core.projects import get_project_id
+
+    app = open_app(args.home, log_to_stderr=False)
+    try:
+        pid = get_project_id(app.conn, args.project) if args.project else None
+        out = budget_status(app.conn, pid, args.session,
+                            stale_after_s=int(app.config.get("telemetry.stale_after_seconds", 300)))
+    finally:
+        app.close()
+    if args.json:
+        _print_json(out)
+        return EXIT_OK
+
+    def show(v: Any) -> str:
+        return "unavailable" if v == "unavailable" else f"{v['used_pct']:.0f}%" + (
+            f" (resets {v['resets_at']})" if v.get("resets_at") else "")
+
+    print(f"context:   {show(out['context'])}")
+    print(f"5-hour:    {show(out['five_hour'])}")
+    print(f"weekly:    {show(out['seven_day'])}")
+    if out.get("reading_age_s") is not None:
+        print(f"reading:   {out['reading_age_s']} s old" + (" (STALE)" if out["stale"] else ""))
+    c = out["est_handoff_cost_range"]
+    print(f"handoff:   needs ~{c['low']}-{c['high']} tokens; feasible: "
+          f"{ {True: 'yes', False: 'NO', None: 'unknown'}[out['feasible']] }")
+    print(f"action:    {out['recommendation']} (handoff mode: {out['recommended_mode']})")
+    if "context_health" in out:
+        h = out["context_health"]
+        print(f"project:   last checkpoint {h['minutes_since_checkpoint'] if h['minutes_since_checkpoint'] is not None else 'never'}"
+              f" min ago, {h['writes_since_checkpoint']} unsaved write(s), {h['open_conflicts']} open conflict(s), "
+              f"{h['uncaptured_sessions']} uncaptured session(s)")
+    if out.get("note"):
+        print(f"note:      {out['note']}")
+    return EXIT_OK
+
+
+def cmd_telemetry(args: argparse.Namespace) -> int:
+    """Generic adapter: any client can push a reading (spec §10.2)."""
+    from ..core.app import open_app
+    from ..core.budget import Reading, record
+    from ..core.db.connection import now_iso
+    from ..core.projects import get_project_id
+
+    app = open_app(args.home, log_to_stderr=False)
+    try:
+        r = Reading(source=f"push:{args.source}", session_key=args.session, ts=now_iso(),
+                    context_used_pct=args.context_pct, context_window_tokens=args.context_window,
+                    five_hour_pct=args.five_hour_pct, seven_day_pct=args.seven_day_pct,
+                    project_id=get_project_id(app.conn, args.project) if args.project else None)
+        stored = record(app.conn, r)
+    finally:
+        app.close()
+    print("reading stored" if stored else "reading skipped (throttled: same values within 15 s)")
     return EXIT_OK
 
 
@@ -644,9 +742,32 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--dry-run", action="store_true", help="show what would change, change nothing")
         sp.add_argument("--json", action="store_true")
         if name == "install-claude-code":
-            sp.add_argument("--no-hook", action="store_true", help="don't add the SessionStart context hook")
+            sp.add_argument("--no-hook", action="store_true", help="don't add hooks or the status line")
+            sp.add_argument("--no-statusline", action="store_true", help="don't set the status line")
+            sp.add_argument("--force-statusline", action="store_true", help="replace an existing status line")
     sp = add("hook", cmd_hook, "Claude Code hook entry point (reads the event JSON on stdin)")
-    sp.add_argument("event", choices=["session-start"])
+    sp.add_argument("event", choices=["session-start", "stop", "pre-compact", "session-end", "stop-failure"])
+    add("statusline", cmd_statusline, "Claude Code status line (reads session JSON on stdin)")
+    sp = add("emergency", cmd_emergency, "write a compact handoff WITHOUT a model; archive a transcript")
+    sp.add_argument("project")
+    sp.add_argument("--transcript", help="Claude Code transcript (.jsonl) to archive first")
+    sp.add_argument("--reason", default="manual")
+    sp.add_argument("--session", help="Claude Code session id (for budget level)")
+    sp.add_argument("--only-if-unsaved", action="store_true",
+                    help="skip the handoff when nothing changed since the last checkpoint")
+    sp = add("status", cmd_status, "budget and context health (telemetry where the client provides it)")
+    sp.add_argument("project", nargs="?")
+    sp.add_argument("--session")
+    sp.add_argument("--json", action="store_true")
+    sp = add("telemetry", cmd_telemetry, "push a budget reading (generic adapter for other clients)")
+    sp.add_argument("action", choices=["push"])
+    sp.add_argument("--session", required=True)
+    sp.add_argument("--source", default="manual")
+    sp.add_argument("--project")
+    sp.add_argument("--context-pct", type=float)
+    sp.add_argument("--context-window", type=int)
+    sp.add_argument("--five-hour-pct", type=float)
+    sp.add_argument("--seven-day-pct", type=float)
     sp = add("snippet", cmd_snippet, "print paste-ready instructions (CLAUDE.md or Desktop project instructions)")
     sp.add_argument("kind", choices=["claude-md", "desktop"])
     sp.add_argument("project", help="project slug")

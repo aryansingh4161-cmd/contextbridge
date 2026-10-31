@@ -16,6 +16,7 @@ command, timeout}]}`, plain stdout becomes context (≤ 10,000 chars).
 from __future__ import annotations
 
 import json
+import re
 import os
 import shlex
 import shutil
@@ -163,7 +164,8 @@ def _claude(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 def install_code(paths: DataPaths, *, uninstall: bool = False, dry_run: bool = False, hook: bool = True,
-                 command: Path | None = None, ctxb: Path | None = None) -> dict[str, Any]:
+                 command: Path | None = None, ctxb: Path | None = None, statusline: bool = True,
+                 force_statusline: bool = False) -> dict[str, Any]:
     out: dict[str, Any] = {"warnings": []}
     exists = _claude("mcp", "get", SERVER_NAME).returncode == 0
     claude_json = Path.home() / ".claude.json"
@@ -177,7 +179,7 @@ def install_code(paths: DataPaths, *, uninstall: bool = False, dry_run: bool = F
             out["mcp"] = "removed"
         elif exists:
             out["mcp"] = "would remove"
-        out["hook"] = _hook(paths, None, remove=True, dry_run=dry_run)
+        out["hooks"] = _hook(paths, None, remove=True, dry_run=dry_run)
         return out
     cmd = command or find_binary("contextbridge-mcp")
     out["warnings"] += binary_warnings(cmd)
@@ -198,44 +200,68 @@ def install_code(paths: DataPaths, *, uninstall: bool = False, dry_run: bool = F
         out["mcp"] = "added (user scope: every project)"
     if hook:
         ctxb_bin = ctxb or find_binary("ctxb")
-        hook_cmd = f"{shlex.quote(str(ctxb_bin))} {HOOK_MARK}"
+        base = shlex.quote(str(ctxb_bin))
         if paths.root != Path.home() / ".contextbridge":
-            hook_cmd = f"CONTEXTBRIDGE_HOME={shlex.quote(str(paths.root))} {hook_cmd}"
-        out["hook"] = _hook(paths, hook_cmd, remove=False, dry_run=dry_run)
+            base = f"CONTEXTBRIDGE_HOME={shlex.quote(str(paths.root))} {base}"
+        out["hooks"] = _hook(paths, base, remove=False, dry_run=dry_run, statusline=statusline,
+                             force_statusline=force_statusline)
     return out
 
 
-def _hook(paths: DataPaths, hook_cmd: str | None, *, remove: bool, dry_run: bool) -> dict[str, Any]:
+# event -> (ctxb hook subcommand, timeout seconds). SessionEnd's default budget is 1.5 s; our handler only
+# spawns a detached child, but we still ask for 5 s (docs: per-hook timeout raises the budget, max 60 s).
+HOOK_EVENTS = {"SessionStart": ("session-start", 10), "Stop": ("stop", 10), "PreCompact": ("pre-compact", 30),
+               "SessionEnd": ("session-end", 5), "StopFailure": ("stop-failure", 5)}
+_OURS = re.compile(r"ctxb'? hook (session-start|stop|pre-compact|session-end|stop-failure)$")
+
+
+def _is_ours(g: Any) -> bool:
+    return isinstance(g, dict) and any(isinstance(h, dict) and _OURS.search(str(h.get("command", "")).strip())
+                                       for h in g.get("hooks", []))
+
+
+def _hook(paths: DataPaths, ctxb_cmd: str | None, *, remove: bool, dry_run: bool,
+          statusline: bool = True, force_statusline: bool = False) -> dict[str, Any]:
+    """Merge our hooks (and status line) into ~/.claude/settings.json; other entries are kept."""
     sp = claude_settings_path()
     data = _load_json(sp)
     hooks = data.get("hooks", {})
     if not isinstance(hooks, dict):
         raise CBError("invalid_input", f"'hooks' in {sp} is not an object; refusing to modify it")
-    groups = hooks.get("SessionStart", [])
-    if not isinstance(groups, list):
-        raise CBError("invalid_input", f"'hooks.SessionStart' in {sp} is not a list; refusing to modify it")
-
-    def ours(g: Any) -> bool:
-        return isinstance(g, dict) and any(isinstance(h, dict) and HOOK_MARK in str(h.get("command", ""))
-                                           for h in g.get("hooks", []))
-
-    kept = [g for g in groups if not ours(g)]
-    present = len(kept) != len(groups)
+    new_hooks: dict[str, Any] = dict(hooks)
+    report: dict[str, Any] = {"settings": str(sp)}
+    for event, (sub, timeout) in HOOK_EVENTS.items():
+        groups = hooks.get(event, [])
+        if not isinstance(groups, list):
+            raise CBError("invalid_input", f"'hooks.{event}' in {sp} is not a list; refusing to modify it")
+        kept = [g for g in groups if not _is_ours(g)]
+        if remove:
+            new = kept
+        else:
+            new = [*kept, {"hooks": [{"type": "command", "command": f"{ctxb_cmd} hook {sub}", "timeout": timeout}]}]
+        if new:
+            new_hooks[event] = new
+        else:
+            new_hooks.pop(event, None)
+    sl = data.get("statusLine")
+    sl_ours = isinstance(sl, dict) and str(sl.get("command", "")).strip().endswith("statusline") and "ctxb" in str(
+        sl.get("command", ""))
+    new_data = {k: v for k, v in data.items() if k != "hooks"} | ({"hooks": new_hooks} if new_hooks else {})
     if remove:
-        if not present:
-            return {"settings": str(sp), "status": "not configured"}
-        new_groups = kept
-    else:
-        entry = {"hooks": [{"type": "command", "command": hook_cmd, "timeout": 10}]}
-        if present and [g for g in groups if ours(g)] == [entry]:
-            return {"settings": str(sp), "status": "already configured"}
-        new_groups = [*kept, entry]
+        if sl_ours:
+            new_data.pop("statusLine", None)
+            report["statusline"] = "removed"
+    elif statusline:
+        if sl is None or sl_ours or force_statusline:
+            new_data["statusLine"] = {"type": "command", "command": f"{ctxb_cmd} statusline", "padding": 0}
+            report["statusline"] = "set" if sl is None or sl_ours else "replaced (--force-statusline)"
+        else:
+            report["statusline"] = "kept yours (you already have a status line; --force-statusline to replace it)"
+    if new_data == data:
+        return report | {"status": "already configured" if not remove else "not configured"}
     if dry_run:
-        return {"settings": str(sp), "status": "would remove" if remove else "would add"}
+        return report | {"status": "would remove" if remove else "would update"}
     backup = _backup(sp, paths)
-    new_hooks = {**hooks, "SessionStart": new_groups} if new_groups else {k: v for k, v in hooks.items()
-                                                                           if k != "SessionStart"}
-    new = {**data, "hooks": new_hooks} if new_hooks else {k: v for k, v in data.items() if k != "hooks"}
-    _write_json_atomic(sp, new)
-    return {"settings": str(sp), "status": "removed" if remove else "added", "backup": str(backup) if backup else None,
-            "other_session_start_hooks_kept": len(kept)}
+    _write_json_atomic(sp, new_data)
+    return report | {"status": "removed" if remove else "updated", "events": list(HOOK_EVENTS),
+                     "backup": str(backup) if backup else None}

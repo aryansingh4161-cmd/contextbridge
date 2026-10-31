@@ -391,6 +391,31 @@ def build_server(app: App) -> MCPServer:
         log.info("event=import_context action=%s source_type=%s", action, source_type)
         return out
 
+    @server.tool(
+        name="get_budget_status",
+        description=(
+            "Report how close this session is to its limits: context window %, 5-hour and weekly usage % (only "
+            "where the client exposes them; Claude Code's status line does, Claude Desktop doesn't, and then this "
+            "says 'unavailable'), the estimated cost of a handoff, whether one is still feasible, and the "
+            "recommended action. Call it when the user asks about limits or before a long task."
+        ),
+        annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True, open_world_hint=False),
+    )
+    @_tool_errors
+    def get_budget_status(
+        project: Annotated[str | None, Field(max_length=63, description="Project slug (adds context health)")] = None,
+        session_key: Annotated[str | None, Field(max_length=120, description="Claude Code session id, if known")] = None,
+    ) -> dict[str, Any]:
+        from ..core.budget import budget_status
+
+        with app.db() as conn:
+            pid = proj.get_project_id(conn, project) if project else None
+            out = budget_status(conn, pid, session_key,
+                                stale_after_s=int(app.config.get("telemetry.stale_after_seconds", 300)))
+            if pid is not None:
+                out["checkpoint_status"] = checkpoint_status(conn, pid)
+        return out
+
     # ---------------------------------------------------------------- prompts (user-invocable)
 
     @server.prompt(name="resume", title="Resume a project",

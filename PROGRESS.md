@@ -2,7 +2,7 @@
 
 Resume from this file alone. Spec: `../ContextBridge_ClaudeCode_Prompt.md`. Blueprint: `docs/BLUEPRINT.md`.
 
-**Current state (2026-10-31):** M1–M7 done. 172/172 tests pass, mypy --strict clean. 10 MCP tools + 3 prompts + 5 resources. Installed on the user's Mac (Claude Code + Desktop). Next: **M8** (budget monitor). Code: https://github.com/aryansingh4161-cmd/contextbridge (public, MIT, branch `main`).
+**Current state (2026-10-31):** M1–M8 done (M8 pending only the user's OK to add the status line + new hooks to their real settings). 190/190 tests pass, mypy --strict clean. 11 MCP tools + 3 prompts + 5 resources. Next: **M9** (hardening & docs). Code: https://github.com/aryansingh4161-cmd/contextbridge (public, MIT, branch `main`).
 
 | Milestone | Status | Verified how | Notes |
 |---|---|---|---|
@@ -14,7 +14,7 @@ Resume from this file alone. Spec: `../ContextBridge_ClaudeCode_Prompt.md`. Blue
 | M5 Packaging | done | pytest (unit round trips, CLI subprocess migration between two data dirs) | Profiles, splitting, consolidation, manifest/merge done in M4; M5 adds full export/import + round trips |
 | M6 Import | done | pytest (unit, stdio, CLI), 14 real local transcripts parsed, 2 real Claude Code sessions (stage hostile file → commit selected items) | Acceptance Test 8 covered. Claude data-export parser built to a tolerant, UNVERIFIED shape (needs a real export) |
 | M7 Client integration | done | pytest (fake HOME + fake `claude`), real install on the user's Mac, real Claude Code session with the hook, 2 Desktop checks by the user | V9 ✓ tools work in Desktop; V8 ✗ Desktop hides server instructions → habits carried in tool results (verified); account-switch check deferred |
-| M8 Budget monitor | todo | | |
+| M8 Budget monitor | done | pytest (unit + subprocess hooks), 2 real Claude Code sessions with the Stop hook | Acceptance tests 17–22 covered; 19, 20, 23 at core level; status line ~80–100 ms |
 | M9 Hardening & docs | todo | | |
 
 ## M1 tasks
@@ -28,6 +28,18 @@ Resume from this file alone. Spec: `../ContextBridge_ClaudeCode_Prompt.md`. Blue
 - [x] MCP server (stdio, `mcp` 2.3 `MCPServer`) with instructions, `list_projects`, `create_project`; CBError → structured tool error
 - [x] CLI `ctxb init | projects | doctor | version` (stdlib-only import path)
 - [x] `make_slug`: NFKD accent stripping; non-ASCII-only names refused → explicit slug
+
+## M8 tasks
+- [x] Re-verified (docs 2026-10-31): status-line config + stdin fields (`context_window.used_percentage` input-only, may be null; `rate_limits.five_hour|seven_day.{used_percentage, resets_at}` Unix s, Pro/Max/Ultra only, after first response, windows may be absent), 300 ms debounce and in-flight cancel; Stop (`stop_hook_active`, `hookSpecificOutput.additionalContext`, 8-continuation cap), PreCompact (`trigger`, `transcript_path`), SessionEnd (`reason`, 1.5 s default, per-hook timeout up to 60 s, no decision control), StopFailure (`error` values, output ignored)
+- [x] `core/budget.py`: `Reading` (every field optional; absent ≠ 0; no budget inferred from another), throttled storage (≤ 1 row/15 s/session unless ≥ 1 point change; last 200 kept), expired rate-limit windows ignored, thresholds 70/80/85/90/95 across context/5h/7d, feasibility (`required = 1.5k + 2×0.5k + 0.5k + 10% window`; act at 85 when `available < required + 3k`), recommended handoff mode (quick when infeasible), `budget_status`
+- [x] `ctxb statusline` (`ctx 72% · 5h 41% · 7d 63% · ckpt 12m ago · handoff ✓ · folio`, `–` for absent, never fails, fast path without scheduled backup)
+- [x] Hooks: `stop` (once per level per session, write-ahead state file, level satisfied by a checkpoint (80/85) or handoff (90/95) made after the status line first saw it, `stop_hook_active` honoured, unsafe session ids ignored, stale readings ignored), `pre-compact` (archives transcript to the linked project, never blocks), `session-end` / `stop-failure` (spawn a detached `ctxb emergency` and return immediately)
+- [x] `ctxb emergency` (archive transcript + compact handoff labelled "not AI-synthesized after <last checkpoint>", `--only-if-unsaved`), `ctxb status`, `ctxb telemetry push` (generic adapter), MCP `get_budget_status` (11 tools), `checkpoint_status.telemetry` = available only with a fresh reading, recommendation escalates at 85/90
+- [x] Installer adds the status line (keeps a status line you already have unless `--force-statusline`) and Stop / PreCompact / SessionEnd / StopFailure hooks; uninstall removes only ours
+
+## M8 verification
+- `uv run pytest`: 190 passed. Test 17: readings stored from real-shaped status-line JSON, absent fields shown "–" and stored NULL, "unavailable" in Desktop-like setups, stale (> 300 s) flagged and ignored for nudges; throttle; expired windows. Test 18 + 21: readings 50→99% with 3 Stop events per step fire exactly once each at 80/85/90/95, `stop_hook_active` never fires, a checkpoint after crossing satisfies 85 but not 90 (needs a handoff), path-traversal session ids and stale readings do nothing. Test 19: infeasible → quick mode recommended; feasibility triggers before percentages. Test 20/23: emergency handoff labelled, transcript archived and searchable, `get_context` still resumes; `--only-if-unsaved` skips when nothing changed. Test 22: PreCompact archives to the linked project's session (capture=transcript), no duplicate, never blocks. SessionEnd hook returns in < 1.5 s and the detached child writes the emergency handoff. All hook commands exit 0 with a broken data dir. Status line 80–100 ms per call.
+- Real Claude Code sessions (temp data dir, `--settings` file, user settings untouched): reading of 86 % pushed for the session → Stop hook asked once → model called `checkpoint` itself, told the user in one line and stopped; resumed same session for another turn → no further request (checkpoint count unchanged).
 
 ## M7 tasks
 - [x] Verified (docs, 2026-10-31): SessionStart hook config shape, stdin fields (`cwd`, `source`…), plain stdout → context, 10,000-char cap; `claude mcp add --transport stdio --scope user <name> -- <cmd>` stored in ~/.claude.json

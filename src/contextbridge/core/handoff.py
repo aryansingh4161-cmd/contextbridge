@@ -162,7 +162,9 @@ def _write(path: Path, text: str) -> None:
 
 def prepare_handoff(conn: sqlite3.Connection, paths: DataPaths, config: Config, project_id: int, *,
                     mode: Mode = "standard", profile: str | None = None, fmt: str | None = None,
-                    final_updates: CheckpointIn | None = None, near_duplicate_threshold: float = 0.85) -> dict[str, Any]:
+                    final_updates: CheckpointIn | None = None, near_duplicate_threshold: float = 0.85,
+                    emergency_banner: str | None = None,
+                    emergency_meta: dict[str, Any] | None = None) -> dict[str, Any]:
     if mode not in MODES:
         raise CBError("invalid_input", f"mode '{mode}' is invalid", f"one of {', '.join(MODES)}")
     prof = load_profile(config, profile)
@@ -188,6 +190,10 @@ def prepare_handoff(conn: sqlite3.Connection, paths: DataPaths, config: Config, 
         data, level=level, budget=_budget(config, level), package_type=package_type, gen_at=gen_at,
         companions=companions, stale_after_days=int(config.get("synthesis.stale_after_days", 30)))
     warnings += w
+    if emergency_banner:
+        primary = primary.replace("# Instructions for the AI reading this", emergency_banner
+                                  + "# Instructions for the AI reading this", 1)
+        primary = primary.replace('package_type: "session_handoff"', 'package_type: "session_handoff"\nemergency: true', 1)
 
     # Redact every exported file (spec §9), then measure, split, and write.
     docs: list[tuple[str, str, str]] = [(PRIMARY, "handoff", primary)] + [
@@ -249,17 +255,20 @@ def prepare_handoff(conn: sqlite3.Connection, paths: DataPaths, config: Config, 
         "omitted_from_primary": sel.omitted,
         "warnings": warnings,
     }
+    if emergency_meta is not None:
+        manifest["emergency"] = emergency_meta | {"note": "not AI-synthesized after the last checkpoint"}
     _write(out_dir / "00_manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
 
     with write_tx(conn):
-        snap_id, _ = create_snapshot_tx(conn, project_id, "handoff", label=f"{mode} handoff",
+        snap_id, _ = create_snapshot_tx(conn, project_id, "handoff",
+                                        label=f"{'emergency ' if emergency_banner else ''}{mode} handoff",
                                         reason=str(out_dir),
                                         handoff={"manifest": manifest, "primary": out_texts.get(f"{PRIMARY}.{ext}")
                                                  or "".join(t for n, t in out_texts.items() if n.startswith(PRIMARY))})
         conn.execute(
             "INSERT INTO handoff_runs(project_id, mode, profile, estimated_tokens_low, estimated_tokens_high,"
             " actual_chars, bytes, file_count, validation_score, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (project_id, mode, prof.name, total_tokens["low"], total_tokens["high"],
+            (project_id, ("emergency-" if emergency_banner else "") + mode, prof.name, total_tokens["low"], total_tokens["high"],
              sum(len(t) for t in out_texts.values()), sum(f["bytes"] for f in files), len(files),
              report["score"], gen_at))
 

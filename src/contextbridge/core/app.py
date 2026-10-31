@@ -46,7 +46,9 @@ class App:
         self.conn.close()
 
 
-def open_app(root: str | os.PathLike[str] | None = None, *, log_to_stderr: bool = True) -> App:
+def open_app(root: str | os.PathLike[str] | None = None, *, log_to_stderr: bool = True,
+             maintenance: bool = True) -> App:
+    """`maintenance=False` (status line, hooks: latency-critical) skips the opportunistic DB backup."""
     paths = resolve_paths(root)
     ensure_layout(paths)
     write_default_config(paths)
@@ -58,5 +60,6 @@ def open_app(root: str | os.PathLike[str] | None = None, *, log_to_stderr: bool 
     if applied:
         log.info("event=schema_ready applied=%s", applied)
     app = App(paths, config, conn)
-    app.scheduled_backup()
+    if maintenance:
+        app.scheduled_backup()
     return app
