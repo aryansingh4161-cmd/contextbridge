@@ -29,6 +29,12 @@ Resume from this file alone. Spec: `docs/SPEC.md` (copy of `../ContextBridge_Cla
 - [x] CLI `ctxb init | projects | doctor | version` (stdlib-only import path)
 - [x] `make_slug`: NFKD accent stripping; non-ASCII-only names refused → explicit slug
 
+## Post-MVP: first real project (2026-10-31, user chose "set up my first real project" → ContextBridge itself)
+- [x] Project `contextbridge` created in the user's REAL memory (`~/.contextbridge`), seeded from this build: 26 entries (11 decisions, 3 rejected approaches, 1 requirement, 1 constraint, 4 lessons, 2 facts, 3 open questions, 1 milestone) with honest provenance (4 user_stated, 12 user_confirmed, 10 verified), 6 Live State sections, 4 tasks, checkpoint #1; linked to the repo folder; `CLAUDE.md` added to the repo
+- [x] Real-use findings fixed: (1) handoff cost estimate ballooned to ~100k tokens with a 1M-token window → reserve capped at 20k; (2) the brief loaded at session start listed decisions without reasons and dropped open questions → decision digests keep a short "why", open questions are mandatory
+- [x] Verified with fresh, real Claude Code sessions in the repo folder (user's real config, no tools allowed): the SessionStart hook alone gave the model the project, where we stopped (incl. the latest commit), next action, the language decision with its reason, and all three open questions. `ctxb handoff contextbridge` → 3 files, ~4.8k tokens primary, score 1.0, no coverage gaps
+- [x] Seeding note: the server rejected one seeded decision that lacked a rationale (validation working); the partial project was purged and re-seeded cleanly
+
 ## M9 tasks
 - [x] Gap review against the spec: added the 12th MCP tool `forget` (entry / session / project; confirm=true; recovery point first; exact project name for a project) and CLI `delete`, `purge` (permanent: DB rows, snapshots — also inside backups —, exports, recovery archives, every backup DB), `remember` (manual), `migrate`
 - [x] Acceptance suite in `tests/acceptance/`: Test 24 (real child process SIGKILLed at 12 random points, before the first write, and 7 times mid-handoff with a test-only write delay that proves packages really are half-written, plus after a StopFailure hook), Test 11 (all flows with every network call failing), Test 10 (> 20 files under a 20-file profile)
