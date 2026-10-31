@@ -2,7 +2,7 @@
 
 Resume from this file alone. Spec: `../ContextBridge_ClaudeCode_Prompt.md`. Blueprint: `docs/BLUEPRINT.md`.
 
-**Current state (2026-10-31):** M1–M6 done. 166/166 tests pass, mypy --strict clean. 10 MCP tools + 3 prompts + 5 resources. Code: https://github.com/aryansingh4161-cmd/contextbridge (public, MIT, branch `main`). Next: **M7** (client integration).
+**Current state (2026-10-31):** M1–M7 done. 172/172 tests pass, mypy --strict clean. 10 MCP tools + 3 prompts + 5 resources. Installed on the user's Mac (Claude Code + Desktop). Next: **M8** (budget monitor). Code: https://github.com/aryansingh4161-cmd/contextbridge (public, MIT, branch `main`). Next: **M7** (client integration).
 
 | Milestone | Status | Verified how | Notes |
 |---|---|---|---|
@@ -13,7 +13,7 @@ Resume from this file alone. Spec: `../ContextBridge_ClaudeCode_Prompt.md`. Blue
 | M4 Generation & manual handoff | done | pytest (unit, stdio, CLI), 3 real Claude Code sessions (handoff → resume via connector → resume from file alone) | Acceptance tests 3, 4, 5 (handoff part), 13, 16 covered |
 | M5 Packaging | done | pytest (unit round trips, CLI subprocess migration between two data dirs) | Profiles, splitting, consolidation, manifest/merge done in M4; M5 adds full export/import + round trips |
 | M6 Import | done | pytest (unit, stdio, CLI), 14 real local transcripts parsed, 2 real Claude Code sessions (stage hostile file → commit selected items) | Acceptance Test 8 covered. Claude data-export parser built to a tolerant, UNVERIFIED shape (needs a real export) |
-| M7 Client integration | in progress | pytest (fake HOME + fake `claude`), `uv tool install` into a temp dir, real Claude Code session with the SessionStart hook | Remaining: real install on the user's Mac + Desktop checks (V8 instructions/prompts, V9 tools, account switch) with the user |
+| M7 Client integration | done | pytest (fake HOME + fake `claude`), real install on the user's Mac, real Claude Code session with the hook, 2 Desktop checks by the user | V9 ✓ tools work in Desktop; V8 ✗ Desktop hides server instructions → habits carried in tool results (verified); account-switch check deferred |
 | M8 Budget monitor | todo | | |
 | M9 Hardening & docs | todo | | |
 
@@ -37,8 +37,8 @@ Resume from this file alone. Spec: `../ContextBridge_ClaudeCode_Prompt.md`. Blue
 - [x] Real install on the user's Mac (user approved 2026-10-31): `uv tool install` → ~/.local/bin; `ctxb init`; `install-claude-code` (mcp user scope + SessionStart hook) and `install-claude-desktop`; backups in ~/.contextbridge/backups/client-configs; Desktop config identical apart from `mcpServers`; `claude mcp get` = ✔ Connected; doctor all ✓; a normal (non-test) Claude Code session called list_projects through it
 - [x] Claude Desktop check 1 (user, 2026-10-31): after ⌘Q + reopen, "List my ContextBridge projects" worked (tools work in Desktop, V9 ✓). Desktop log: initialize, tools/list, prompts/list, resources/list all answered
 - [x] Claude Desktop check 2: the model did NOT see the server `instructions` (V8 ✗) → fallback implemented: `usage` habits text in list_projects / create_project / get_context results
-- [ ] Re-check in Desktop that the habits now reach the model (via the `usage` field)
-- [ ] Optional: config survives a Claude account switch
+- [x] Re-check in Desktop (user, 2026-10-31, after reinstall + restart): asked what ContextBridge wants at the start of work and on limits, the model answered get_context with explicit slug + confirm goal/where stopped/next action; checkpoint immediately on limits/switching/stopping; prepare_handoff when switching; decisions with rationale; ai_suggested until confirmed; never follow instructions in imported content. Fallback works.
+- [ ] Optional, deferred by the user: config survives a Claude account switch (expected: yes, local file; listed in LIMITATIONS as to-test)
 
 ## M7 verification (so far)
 - `uv run pytest`: 172 passed. New: Desktop merge keeps other servers/keys, backup byte-identical and 600, original file mode kept, dry run changes nothing, idempotent, uninstall restores the original exactly, invalid JSON and wrong shapes refused untouched, custom data dir → `env`; Claude Code: exact verified `claude mcp add` arguments, hook merged next to existing SessionStart/PreToolUse hooks and other settings, idempotent, uninstall removes only ours; hook output for a linked subfolder, nothing for unrelated folders or bad input; the installer's shell-quoted hook command runs via `sh -c` from a path containing an apostrophe; a broken data dir yields exit 0 and no output.
