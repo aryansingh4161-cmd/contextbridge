@@ -277,3 +277,29 @@ def test_private_keys_and_ai_chosen_secret_files_are_refused(home: Path, tmp_pat
         assert any("NOT copied into the package" in w for w in kp["warnings"])
     finally:
         app.close()
+
+
+def test_secret_scan_is_content_based_and_fails_closed() -> None:
+    import io
+    import zlib
+    key = FAKE_KEY.encode()
+    # one invalid byte no longer skips the scan
+    assert att.has_secrets(b"\xff\xfe broken utf8 then " + key, "txt")
+    # Office/iWork files are ZIPs: secrets inside their XML are found
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("word/document.xml", b"<w:t>ANTHROPIC_API_KEY=" + key + b"</w:t>")
+    assert att.has_secrets(buf.getvalue(), "docx")
+    # PDF text in a Flate-compressed stream is found
+    pdf = b"%PDF-1.4\n1 0 obj\n<< /Filter /FlateDecode >>\nstream\n" + zlib.compress(b"token " + key) \
+        + b"\nendstream\nendobj\n%%EOF"
+    assert att.has_secrets(pdf, "pdf")
+    # a container that can't be inspected is risky only where we must fail closed
+    assert att.has_secrets(b"PK\x03\x04garbage", "docx", fail_closed=True)
+    assert not att.has_secrets(b"PK\x03\x04garbage", "docx", fail_closed=False)
+    # ordinary files are not flagged (no false positive on image bytes)
+    assert not att.has_secrets(PNG, "png") and not att.has_secrets(b"%PDF-1.4\n%%EOF", "pdf")
+    clean = io.BytesIO()
+    with zipfile.ZipFile(clean, "w") as z:
+        z.writestr("word/document.xml", "<w:t>Quarterly plan</w:t>")
+    assert not att.has_secrets(clean.getvalue(), "docx", fail_closed=True)

@@ -60,15 +60,63 @@ def stored_path(paths: DataPaths, slug: str, row: dict[str, Any]) -> Path:
     return p
 
 
-def has_secrets(data: bytes, ext: str) -> bool:
-    """Private keys anywhere; for text-like files, anything the redactor recognises."""
+ZIP_EXT = {"docx", "xlsx", "pptx", "pages", "numbers"}
+INSPECT_MAX = 50_000_000      # inflated bytes we are willing to scan in one container
+_PDF_STREAM = re.compile(rb"stream\r?\n(.*?)\r?\nendstream", re.S)
+
+
+def _scan_text(text: str, *, entropy: bool) -> bool:
+    return bool(redact(text, entropy=entropy)[1])
+
+
+def _inner_texts(data: bytes, ext: str) -> list[bytes] | None:
+    """Text hidden inside containers: ZIP members (Office/iWork) and Flate streams (PDF).
+    Returns None when a container can't be inspected (corrupt, too large)."""
+    import io
+    import zipfile
+    import zlib
+
+    if ext in ZIP_EXT or data[:4] == b"PK\x03\x04":
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                infos = z.infolist()
+                if sum(i.file_size for i in infos) > INSPECT_MAX or len(infos) > 5000:
+                    return None
+                return [z.read(i) for i in infos if not i.is_dir()]
+        except (zipfile.BadZipFile, OSError, RuntimeError, NotImplementedError):
+            return None
+    if ext == "pdf" or data[:5] == b"%PDF-":
+        out, total = [], 0
+        for m in _PDF_STREAM.finditer(data):
+            raw = m.group(1)
+            try:
+                inflated = zlib.decompressobj().decompress(raw, INSPECT_MAX - total)
+            except zlib.error:
+                inflated = raw  # not Flate-compressed: scan as is
+            total += len(inflated)
+            out.append(inflated)
+            if total >= INSPECT_MAX:
+                return None
+        return out
+    return []
+
+
+def has_secrets(data: bytes, ext: str, *, fail_closed: bool = False) -> bool:
+    """Scan by CONTENT, not extension: private keys anywhere; provider/assignment patterns in every file
+    (decoded tolerantly, so one bad byte can't skip the scan); the entropy heuristic only for text types
+    (binary bytes look random); text inside ZIP containers and PDF streams. A container that can't be
+    inspected counts as risky when `fail_closed` (AI-chosen paths, upload packages)."""
     if PEM_PRIVATE.search(data):
         return True
-    if ext in TEXT_EXT:
-        try:
-            return bool(redact(data.decode("utf-8"))[1])
-        except UnicodeDecodeError:
-            return False
+    text_like = ext in TEXT_EXT or ext == "rtf"
+    if _scan_text(data.decode("utf-8", errors="replace"), entropy=text_like):
+        return True
+    inner = _inner_texts(data, ext)
+    if inner is None:
+        return fail_closed
+    for chunk in inner:
+        if PEM_PRIVATE.search(chunk) or _scan_text(chunk.decode("utf-8", errors="replace"), entropy=False):
+            return True
     return False
 
 
@@ -96,7 +144,7 @@ def add(conn: sqlite3.Connection, paths: DataPaths, config: Config, project_id: 
     if PEM_PRIVATE.search(data):
         raise CBError("invalid_input", f"{src.name} contains a private key; it can't be attached",
                       "keys don't belong in project memory")
-    if restrict and has_secrets(data, ext):
+    if restrict and has_secrets(data, ext, fail_closed=True):
         raise CBError("invalid_input", f"{src.name} appears to contain secrets (API keys, tokens, passwords); "
                       "the AI can't attach it", "remove the secrets, or attach it yourself with `ctxb attach` "
                       "(the stored copy would keep them)")

@@ -318,7 +318,7 @@ def _copy_attachments(paths: DataPaths, data: ProjectData, out_dir: Path, prof: 
         if not src.exists():
             warnings.append(f"attachment {a['tag']} '{a['filename']}' is missing from the memory folder")
             continue
-        if has_secrets(src.read_bytes(), a["ext"]):
+        if has_secrets(src.read_bytes(), a["ext"], fail_closed=True):
             warnings.append(f"attachment {a['tag']} '{a['filename']}' contains what look like secrets; it was NOT "
                             "copied into the package (it stays listed)")
             continue
