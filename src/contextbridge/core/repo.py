@@ -40,7 +40,23 @@ class UnsafeRepo(Exception):
     """The repo's config is shaped in a way we refuse to run working-tree commands against."""
 
 
+MIN_GIT = (2, 31)  # GIT_CONFIG_COUNT support; older git silently ignores it, so we refuse to run it
+_version_cache: tuple[int, ...] | None = None
+
+
+def git_version() -> tuple[int, ...]:
+    global _version_cache
+    if _version_cache is None:
+        out = subprocess.run(["git", "--version"], capture_output=True, text=True, timeout=GIT_TIMEOUT_S,
+                             stdin=subprocess.DEVNULL)
+        m = re.search(r"(\d+)\.(\d+)", out.stdout)
+        _version_cache = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+    return _version_cache
+
+
 def _run(path: Path, args: list[str], config: list[tuple[str, str]] | None = None) -> subprocess.CompletedProcess[str]:
+    if git_version() < MIN_GIT:
+        raise UnsafeRepo(f"git {'.'.join(map(str, git_version()))} is older than 2.31; its safety settings can't be enforced")
     env = {**os.environ, **_ENV}
     pairs = config or []
     env["GIT_CONFIG_COUNT"] = str(len(pairs))
@@ -96,6 +112,8 @@ def repo_summary(linked_dir: str | None) -> dict[str, Any] | None:
         return {"path": linked_dir, "error": "git is not installed; no repo details"}
     try:
         _git(path, "rev-parse", "--is-inside-work-tree")
+    except UnsafeRepo as exc:
+        return {"path": linked_dir, "error": f"repo details skipped for safety: {exc}"}
     except (RuntimeError, OSError, subprocess.TimeoutExpired):
         return {"path": linked_dir, "error": "not a git repository; no repo details"}
     info: dict[str, Any] = {"path": linked_dir}

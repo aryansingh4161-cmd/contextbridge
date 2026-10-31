@@ -260,3 +260,10 @@ def test_git_fails_closed_on_risky_repo_config(tmp_path: Path, setup: str) -> No
     info = repo_summary(str(repo))
     assert info is not None and "skipped for safety" in info.get("warning", "")
     assert not marker.exists()
+
+
+def test_old_git_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from contextbridge.core import repo as repo_mod
+    monkeypatch.setattr(repo_mod, "git_version", lambda: (2, 30))
+    info = repo_mod.repo_summary(str(tmp_path))
+    assert info is not None and "older than 2.31" in info["error"]
