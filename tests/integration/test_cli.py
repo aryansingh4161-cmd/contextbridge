@@ -139,3 +139,25 @@ def test_merge_rejects_unsafe_manifest_names(home: Path, tmp_path: Path) -> None
     (pkg / "a.md").write_text("a")
     r = run(home, "merge", str(pkg))
     assert "HASH MISMATCH" in r.stdout and not (tmp_path.parent / "escape.merged.md").exists()
+
+
+def test_import_cli_stage_then_commit(home: Path, tmp_path: Path) -> None:
+    from contextbridge.core.app import open_app
+    from contextbridge.core import projects as proj
+
+    app = open_app(home, log_to_stderr=False)
+    proj.create_project(app.conn, name="P", objective="o", slug="pp")
+    app.close()
+    notes = tmp_path / "notes.md"
+    notes.write_text("## Bug: login 500\nCrashes when the password is wrong.\n")
+    r = run(home, "import", str(notes), "--type", "markdown", "--project", "pp")
+    assert r.returncode == 0 and "Nothing saved yet" in r.stdout and "IMPORTED_DATA" in r.stdout
+    sid = r.stdout.split("ctxb import-commit pp ")[1].split()[0]
+    r = run(home, "import-commit", "pp", sid)
+    assert r.returncode == 0 and "Committed:" in r.stdout
+    assert "login 500" in run(home, "search", "pp", "login").stdout
+    jl = tmp_path / "s.jsonl"
+    jl.write_text(json.dumps({"type": "user", "sessionId": "s1", "message": {"role": "user", "content": "hello"}}) + "\n")
+    r = run(home, "ingest-transcript", "pp", str(jl))
+    assert r.returncode == 0 and "Archived 1" in r.stdout
+    assert "already archived" in run(home, "ingest-transcript", "pp", str(jl)).stdout

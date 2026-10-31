@@ -98,3 +98,18 @@ class FinalUpdates(BaseModel):
                             items=[i.to_core() for i in self.items or []] or None,
                             sections={k: v.to_core() for k, v in (self.sections or {}).items()} or None,
                             tasks=[t.to_core() for t in self.tasks or []] or None)
+
+
+class ImportEdit(BaseModel):
+    """A correction to one staged import item before it is committed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    index: int = Field(ge=0, description="Index from the stage preview")
+    kind: Kind | None = None
+    topic_key: str | None = Field(None, max_length=120)
+    title: str | None = Field(None, max_length=300)
+    importance: Literal["critical", "important", "optional"] | None = None
+    rationale: str | None = Field(None, max_length=5000)
+    body: str | None = Field(None, max_length=20_000)
+    replace: bool | None = Field(None, description="For a Live State section that already has content: overwrite it")

@@ -10,7 +10,7 @@ import argparse
 import json
 import sys
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..core.errors import CBError
 
@@ -377,29 +377,105 @@ def cmd_export(args: argparse.Namespace) -> int:
 
 def cmd_import(args: argparse.Namespace) -> int:
     from ..core.app import open_app
-    from ..core.transfer import import_full
 
-    if not args.full:
-        raise CBError("invalid_input", "only `ctxb import --full` exists yet (archives and package sidecars)",
-                      "importing transcripts, Markdown and pasted text arrives in M6")
+    if args.full:
+        from ..core.transfer import import_full
+
+        app = open_app(args.home, log_to_stderr=False)
+        try:
+            out = import_full(app.conn, app.paths, args.source, only=args.project or None, as_slug=args.as_slug,
+                              dry_run=args.dry_run)
+        finally:
+            app.close()
+        if args.json:
+            _print_json(out)
+            return EXIT_OK
+        if out.get("dry_run"):
+            for p in out["would_import"]:
+                print(f"would import {p['slug']}: {p['rows']} rows")
+            return EXIT_OK
+        for r in out["imported"]:
+            ids = "ids preserved" if r["ids_preserved"] else f"ids remapped ({', '.join(r['id_map'])}; see --json)"
+            print(f"✓ {r['slug']}: {sum(r['counts'].values())} rows, {ids}"
+                  + (f", {r['redactions']} secret(s) redacted" if r["redactions"] else ""))
+        print(f"Backup taken first: {out['backup']}")
+        return EXIT_OK
+
+    from pathlib import Path
+
+    from ..core.importer import staging as imp
+    from ..core.projects import get_project_id
+
+    if not args.project or len(args.project) != 1:
+        raise CBError("invalid_input", "say which project to import into: --project SLUG")
+    if not args.type:
+        raise CBError("invalid_input", "say what the source is: --type package|markdown|transcript_claude_code|"
+                                       "claude_export|text")
     app = open_app(args.home, log_to_stderr=False)
     try:
-        out = import_full(app.conn, app.paths, args.source, only=args.project or None, as_slug=args.as_slug,
-                          dry_run=args.dry_run)
+        pid = get_project_id(app.conn, args.project[0])
+        src = str(Path(args.source).expanduser().resolve()) if args.source != "-" else None
+        text = sys.stdin.read() if args.source == "-" else None
+        staged = imp.stage(app.conn, app.paths, app.config, pid, args.type, path=src, text=text)
+        if not args.yes:
+            print(staged["preview"])
+            for n in staged["notes"]:
+                print(f"note: {n}")
+            if staged["redactions"]:
+                print(f"redacted: {staged['redactions']}")
+            print(f"\nNothing saved yet. Commit with: ctxb import-commit {args.project[0]} {staged['staging_id']}"
+                  "   (or re-run with --yes; --discard to drop it)")
+            return EXIT_OK
+        out = imp.commit(app.conn, pid, staged["staging_id"])
     finally:
         app.close()
-    if args.json:
+    return _print_commit(out, args.json)
+
+
+def _print_commit(out: dict[str, Any], as_json: bool) -> int:
+    if as_json:
         _print_json(out)
         return EXIT_OK
-    if out.get("dry_run"):
-        for p in out["would_import"]:
-            print(f"would import {p['slug']}: {p['rows']} rows")
+    results = out.get("item_results") or []
+    counts: dict[str, int] = {}
+    for r in results:
+        counts[r["status"]] = counts.get(r["status"], 0) + 1
+    print(f"Committed: {counts or 'no knowledge items'}; archived: "
+          f"{sum(1 for a in out.get('archived', []) if a['stored'])}")
+    for sk in out.get("skipped", []):
+        print(f"  skipped [{sk['index']}]: {sk['reason']}")
+    return EXIT_OK
+
+
+def cmd_import_commit(args: argparse.Namespace) -> int:
+    from ..core.importer import staging as imp
+
+    app, pid = _project_app(args)
+    try:
+        out = imp.discard(app.conn, pid, args.staging_id) if args.discard else imp.commit(app.conn, pid, args.staging_id)
+    finally:
+        app.close()
+    if args.discard:
+        print(f"Discarded staging {args.staging_id}; nothing was saved.")
         return EXIT_OK
-    for r in out["imported"]:
-        ids = "ids preserved" if r["ids_preserved"] else f"ids remapped ({', '.join(r['id_map'])}; see --json)"
-        print(f"✓ {r['slug']}: {sum(r['counts'].values())} rows, {ids}"
-              + (f", {r['redactions']} secret(s) redacted" if r["redactions"] else ""))
-    print(f"Backup taken first: {out['backup']}")
+    return _print_commit(out, False)
+
+
+def cmd_ingest(args: argparse.Namespace) -> int:
+    """Archive a Claude Code transcript into a project (no knowledge items): for hooks (M8) and by hand."""
+    from pathlib import Path
+
+    from ..core.importer import staging as imp
+
+    app, pid = _project_app(args)
+    try:
+        staged = imp.stage(app.conn, app.paths, app.config, pid, "transcript_claude_code",
+                           path=str(Path(args.transcript).expanduser().resolve()))
+        out = imp.commit(app.conn, pid, staged["staging_id"], select=[])
+    finally:
+        app.close()
+    stored = [a for a in out["archived"] if a["stored"]]
+    print(f"Archived {len(stored)} transcript(s)" + ("" if stored else " (already archived)"))
     return EXIT_OK
 
 
@@ -488,13 +564,22 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--project", action="append", help="only this project (repeatable; default: all)")
     sp.add_argument("-o", "--output", help="file or directory (default: ~/.contextbridge/exports/)")
     sp.add_argument("--json", action="store_true")
-    sp = add("import", cmd_import, "import a full export archive or a handoff package's sidecar")
-    sp.add_argument("source", help="contextbridge_full_*.zip, a package directory, or source_references.json")
+    sp = add("import", cmd_import, "import context (staged, untrusted) or, with --full, a migration archive")
+    sp.add_argument("source", help="file or package folder ('-' = stdin text); with --full: an export ZIP or package")
     sp.add_argument("--full", action="store_true", help="rebuild projects exactly (ids and provenance kept)")
+    sp.add_argument("--type", choices=["package", "markdown", "transcript_claude_code", "claude_export", "text"])
+    sp.add_argument("--yes", action="store_true", help="commit everything staged without review")
     sp.add_argument("--project", action="append", help="only this project from the archive (repeatable)")
     sp.add_argument("--as", dest="as_slug", help="import under a different slug (one project)")
     sp.add_argument("--dry-run", action="store_true")
     sp.add_argument("--json", action="store_true")
+    sp = add("import-commit", cmd_import_commit, "commit (or --discard) a staged import")
+    sp.add_argument("project")
+    sp.add_argument("staging_id", type=int)
+    sp.add_argument("--discard", action="store_true")
+    sp = add("ingest-transcript", cmd_ingest, "archive a Claude Code transcript (.jsonl) into a project")
+    sp.add_argument("project")
+    sp.add_argument("transcript")
     add("version", cmd_version, "print version")
     return p
 

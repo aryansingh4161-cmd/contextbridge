@@ -21,6 +21,12 @@ inline_token_cap = 8000 # larger outputs are written to exports/ and returned as
 near_duplicate_threshold = 0.85
 stale_after_days = 30
 
+[import]
+max_bytes = 20_000_000              # per source file or pasted text
+max_transcript_bytes = 100_000_000  # Claude Code .jsonl (mostly API copies; only message text is kept)
+max_zip_member_bytes = 200_000_000  # conversations.json inside a Claude data export (uncompressed)
+staging_ttl_hours = 24              # staged imports not committed by then are dropped
+
 [handoff.budgets]
 quick = 3000
 standard = 10000
