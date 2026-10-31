@@ -308,7 +308,7 @@ def _copy_attachments(paths: DataPaths, data: ProjectData, out_dir: Path, prof: 
     import re
     import shutil
 
-    from .attachments import stored_path
+    from .attachments import has_secrets, stored_path
 
     d = out_dir / "attachments"
     ensure_private_dir(d)
@@ -317,6 +317,10 @@ def _copy_attachments(paths: DataPaths, data: ProjectData, out_dir: Path, prof: 
         src = stored_path(paths, data.project["slug"], a)
         if not src.exists():
             warnings.append(f"attachment {a['tag']} '{a['filename']}' is missing from the memory folder")
+            continue
+        if has_secrets(src.read_bytes(), a["ext"]):
+            warnings.append(f"attachment {a['tag']} '{a['filename']}' contains what look like secrets; it was NOT "
+                            "copied into the package (it stays listed)")
             continue
         name = f"A-{a['id']:04d}_{re.sub(r'[^A-Za-z0-9._-]', '_', a['filename'])[:120]}"
         dest = d / name

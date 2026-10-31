@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
+import re
 import shutil
 import sqlite3
 from pathlib import Path
@@ -28,18 +29,47 @@ from .security.redact import redact
 IMAGE_EXT = {"png", "jpg", "jpeg", "gif", "webp", "heic"}
 TEXT_EXT = {"txt", "md", "markdown", "csv", "json", "log", "yaml", "yml", "toml", "py", "js", "ts", "html", "css",
             "sql", "sh"}
-DOC_EXT = {"pdf", "docx", "xlsx", "pptx", "rtf", "key", "pages", "numbers"}
+# no ".key": it is Keynote's extension but also the usual name for private keys
+DOC_EXT = {"pdf", "docx", "xlsx", "pptx", "rtf", "pages", "numbers"}
 ALLOWED_EXT = IMAGE_EXT | TEXT_EXT | DOC_EXT
 TEXT_INDEX_MAX = 2_000_000
 PROVENANCES = ("user_stated", "ai_suggested", "user_confirmed", "verified", "imported")
+
+
+SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+PEM_PRIVATE = re.compile(rb"-----BEGIN [A-Z ]*PRIVATE KEY-----")
 
 
 def project_dir(paths: DataPaths, slug: str) -> Path:
     return paths.attachments / slug
 
 
+def valid_row(row: dict[str, Any]) -> bool:
+    return bool(SHA_RE.match(str(row.get("sha256", "")))) and str(row.get("ext", "")) in ALLOWED_EXT
+
+
 def stored_path(paths: DataPaths, slug: str, row: dict[str, Any]) -> Path:
-    return project_dir(paths, slug) / f"{row['sha256']}.{row['ext']}"
+    """Where an attachment's copy lives. Rows can come from imported archives, so the name parts are
+    validated and the result must stay inside the project's attachment folder."""
+    if not valid_row(row):
+        raise CBError("invalid_input", "attachment record has an invalid file name; refusing to touch the disk")
+    base = project_dir(paths, slug).resolve()
+    p = (base / f"{row['sha256']}.{row['ext']}").resolve()
+    if not p.is_relative_to(base):
+        raise CBError("invalid_input", "attachment path escapes the attachments folder")
+    return p
+
+
+def has_secrets(data: bytes, ext: str) -> bool:
+    """Private keys anywhere; for text-like files, anything the redactor recognises."""
+    if PEM_PRIVATE.search(data):
+        return True
+    if ext in TEXT_EXT:
+        try:
+            return bool(redact(data.decode("utf-8"))[1])
+        except UnicodeDecodeError:
+            return False
+    return False
 
 
 def _check_file(paths: DataPaths, config: Config, path: str, restrict: bool) -> Path:
@@ -63,6 +93,13 @@ def add(conn: sqlite3.Connection, paths: DataPaths, config: Config, project_id: 
     src = _check_file(paths, config, path, restrict)
     ext = src.suffix.lower().lstrip(".")
     data = src.read_bytes()
+    if PEM_PRIVATE.search(data):
+        raise CBError("invalid_input", f"{src.name} contains a private key; it can't be attached",
+                      "keys don't belong in project memory")
+    if restrict and has_secrets(data, ext):
+        raise CBError("invalid_input", f"{src.name} appears to contain secrets (API keys, tokens, passwords); "
+                      "the AI can't attach it", "remove the secrets, or attach it yourself with `ctxb attach` "
+                      "(the stored copy would keep them)")
     digest = hashlib.sha256(data).hexdigest()
     slug = conn.execute("SELECT slug FROM projects WHERE id = ?", (project_id,)).fetchone()["slug"]
     if entry_id is not None and conn.execute("SELECT 1 FROM entries WHERE id = ? AND project_id = ?",

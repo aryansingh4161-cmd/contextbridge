@@ -352,6 +352,10 @@ def _fix_row(table: str, row: dict[str, Any], maps: dict[str, dict[int, int]], s
         out["snapshot_json"] = json.dumps(_remap_task_row(json.loads(out["snapshot_json"]), maps), ensure_ascii=False)
     if table == "snapshots":
         out = _remap_snapshot(out, maps, slug)
+    if table == "attachments":
+        from .attachments import valid_row
+        if not valid_row(out):
+            raise CBError("invalid_input", "an attachment record has an invalid sha256/extension; nothing imported")
     for col in REDACT_COLUMNS.get(table, ()):
         if isinstance(out.get(col), str):
             cleaned, found = redact(out[col])

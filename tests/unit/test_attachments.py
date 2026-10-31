@@ -205,3 +205,75 @@ def test_cli_import_commit_match_selects_by_name(home: Path, tmp_path: Path) -> 
         assert titles == {"Folio planning", "Folio deploy"}
     finally:
         app.close()
+
+
+# ---------------------------------------------------------------- security regressions (review findings)
+
+def test_crafted_archive_with_traversal_attachment_rows_is_refused(app: App, tmp_path: Path) -> None:
+    pid = _pid(app)
+    att.add(app.conn, app.paths, app.config, pid, _file(tmp_path, "a.png", PNG), restrict=False)
+    arch = Path(export_full(app.conn, app.paths)["path"])
+    victim = tmp_path / "victim.txt"
+    victim.write_text("do not delete me")
+    for bad in ({"sha256": "../../../" + str(victim.with_suffix("")).lstrip("/"), "ext": "txt"},
+                {"ext": "png/../../x"}):
+        evil = tmp_path / "evil.zip"
+        with zipfile.ZipFile(arch) as zin, zipfile.ZipFile(evil, "w") as zout:
+            manifest = json.loads(zin.read("manifest.json"))
+            for item in zin.infolist():
+                data = zin.read(item)
+                if item.filename == "projects/pp.json":
+                    dump = json.loads(data)
+                    dump["tables"]["attachments"][0].update(bad)
+                    data = json.dumps(dump, sort_keys=True).encode()
+                    manifest["projects"][0]["sha256"] = hashlib.sha256(data).hexdigest()
+                if item.filename != "manifest.json":
+                    zout.writestr(item, data)
+            zout.writestr("manifest.json", json.dumps(manifest))
+        other = open_app(tmp_path / f"new{len(bad)}", log_to_stderr=False)
+        try:
+            with pytest.raises(CBError) as e:
+                import_full(other.conn, other.paths, evil)
+            assert "invalid sha256/extension" in e.value.message
+            assert other.conn.execute("SELECT count(*) FROM projects").fetchone()[0] == 0
+        finally:
+            other.close()
+    assert victim.read_text() == "do not delete me"
+
+
+def test_stored_path_rejects_bad_rows(app: App) -> None:
+    for row in ({"sha256": "../x", "ext": "png"}, {"sha256": "a" * 64, "ext": "png/../../etc"},
+                {"sha256": "a" * 64, "ext": "exe"}):
+        with pytest.raises(CBError):
+            att.stored_path(app.paths, "pp", row)
+    assert att.stored_path(app.paths, "pp", {"sha256": "a" * 64, "ext": "png"}).name == "a" * 64 + ".png"
+
+
+def test_private_keys_and_ai_chosen_secret_files_are_refused(home: Path, tmp_path: Path) -> None:
+    home.mkdir(parents=True)
+    ok = tmp_path / "ok"
+    ok.mkdir()
+    (home / "config.toml").write_text(f"[import]\nallowed_dirs = ['{ok}']\n")
+    app = open_app(home, log_to_stderr=False)
+    try:
+        pid = _pid(app)
+        pem = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----\n"
+        for name in ("id_ed25519.txt", "deploy.pdf"):
+            with pytest.raises(CBError) as e:
+                att.add(app.conn, app.paths, app.config, pid, _file(ok, name, pem), restrict=False)
+            assert "private key" in e.value.message
+        with pytest.raises(CBError):
+            att.add(app.conn, app.paths, app.config, pid, _file(ok, "keynote.key", b"PK\x03\x04"), restrict=False)
+        env_file = _file(ok, "settings.json", json.dumps({"api_key": FAKE_KEY}))
+        with pytest.raises(CBError) as e:  # the AI chose it → refused
+            att.add(app.conn, app.paths, app.config, pid, env_file)
+        assert "appears to contain secrets" in e.value.message
+        out = att.add(app.conn, app.paths, app.config, pid, env_file, restrict=False)  # the user typed it → allowed
+        assert out["stored"] and "warning" in out
+        # … but a secret-bearing attachment is never copied into an upload package
+        kp = prepare_handoff(app.conn, app.paths, app.config, pid, mode="knowledge_package")
+        assert not (Path(kp["directory"]) / "attachments").exists() or not any(
+            (Path(kp["directory"]) / "attachments").iterdir())
+        assert any("NOT copied into the package" in w for w in kp["warnings"])
+    finally:
+        app.close()
