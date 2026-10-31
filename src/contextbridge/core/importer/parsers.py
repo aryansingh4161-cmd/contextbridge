@@ -20,7 +20,7 @@ from ..errors import CBError
 from ..generation.collect import KIND_PREFIX
 from ..generation.render import SECTION_TITLES
 from ..synthesis import normalize_topic_key
-from .safety import decode
+from .safety import decode, package_member
 
 PREFIX_KIND = {v: k for k, v in KIND_PREFIX.items()}
 TITLE_SECTION = {v.lower(): k for k, v in SECTION_TITLES.items()}
@@ -152,14 +152,16 @@ _TASK = re.compile(r"^- \[T-(?P<id>\d{4,}) · (?P<st>[a-z_]+)(?: · P(?P<p>\d))?
                    r"(?: \(depends on [^)]*\))?(?: — done when: (?P<exp>.+))?$")
 
 
-def parse_package(path: Path) -> Parsed:
+def parse_package(path: Path, max_bytes: int = 20_000_000) -> Parsed:
     if path.is_dir():
-        side = path / "source_references.json"
-        if side.is_file():
+        budget = [max_bytes]
+        if (path / "source_references.json").exists():
+            side = package_member(path, "source_references.json", budget)
             return _from_sidecar(json.loads(decode(side.read_bytes(), side.name)), path.name)
-        files = sorted(x for x in path.iterdir() if x.suffix in (".md", ".txt") and x.name[:2].isdigit())
-        if not files:
+        names = sorted(x.name for x in path.iterdir() if x.suffix in (".md", ".txt") and x.name[:2].isdigit())
+        if not names:
             raise CBError("invalid_input", f"{path} has no package files")
+        files = [package_member(path, n, budget) for n in names]
         text = "".join(decode(f.read_bytes(), f.name) for f in files)
         return _from_package_text(text, path.name)
     text = decode(path.read_bytes(), path.name)

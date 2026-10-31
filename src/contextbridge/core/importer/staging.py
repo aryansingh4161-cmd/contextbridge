@@ -45,7 +45,13 @@ def _limits(config: Config) -> tuple[int, int, int]:
             int(config.get("import.max_zip_member_bytes", 200_000_000)))
 
 
-def _parse(source_type: str, paths: DataPaths, config: Config, path: str | None, text: str | None) -> tuple[Parsed, str | None]:
+def allowed_roots(config: Config, paths: DataPaths) -> list[Path]:
+    dirs = config.get("import.allowed_dirs", ["~/Desktop", "~/Documents", "~/Downloads"])
+    return [Path(str(d)).expanduser().resolve() for d in dirs]
+
+
+def _parse(source_type: str, paths: DataPaths, config: Config, path: str | None, text: str | None,
+           roots: list[Path] | None) -> tuple[Parsed, str | None]:
     _, _, max_member = _limits(config)
     max_bytes = _max_for(config, source_type)
     if (path is None) == (text is None):
@@ -61,9 +67,9 @@ def _parse(source_type: str, paths: DataPaths, config: Config, path: str | None,
             return _from_package_text(text, "pasted handoff"), None
         return parse_markdown(text, "pasted text", source_type), None
     assert path is not None
-    p = check_path(path, Path.home(), paths.exports, max_bytes)
+    p = check_path(path, Path.home(), paths.exports, max_bytes, roots)
     if source_type == "package":
-        return parse_package(p), str(p)
+        return parse_package(p, max_bytes), str(p)
     if p.is_dir():
         raise CBError("invalid_input", f"{p} is a folder; only source_type 'package' accepts folders")
     if source_type == "claude_export":
@@ -120,14 +126,16 @@ def _preview(parsed: Parsed, cands: list[dict[str, Any]], archives: list[dict[st
 
 
 def stage(conn: sqlite3.Connection, paths: DataPaths, config: Config, project_id: int, source_type: str, *,
-          path: str | None = None, text: str | None = None) -> dict[str, Any]:
+          path: str | None = None, text: str | None = None, restrict: bool = True) -> dict[str, Any]:
+    """`restrict=True` (MCP, model-chosen paths): only [import] allowed_dirs. CLI passes False."""
     if source_type not in SOURCE_TYPES:
         raise CBError("invalid_input", f"source_type '{source_type}' is invalid", f"one of {', '.join(SOURCE_TYPES)}")
-    parsed, src = _parse(source_type, paths, config, path, text)
+    parsed, src = _parse(source_type, paths, config, path, text, allowed_roots(config, paths) if restrict else None)
+    redactions: list[dict[str, Any]] = []
+    parsed.title = _clean_strings(parsed.title, "source title", redactions)
     if len(parsed.candidates) > MAX_CANDIDATES:
         parsed.notes.append(f"only the first {MAX_CANDIDATES} of {len(parsed.candidates)} items were staged")
         parsed.candidates = parsed.candidates[:MAX_CANDIDATES]
-    redactions: list[dict[str, Any]] = []
     cands = []
     for i, c in enumerate(parsed.candidates):
         cc = _clean_strings(c, f"item {i}", redactions)
@@ -136,7 +144,7 @@ def stage(conn: sqlite3.Connection, paths: DataPaths, config: Config, project_id
             cc["flags"] = fl
         cands.append(cc)
     archives = []
-    archive_flags: list[str] = []
+    archive_flags: list[str] = flags(parsed.title)
     for a in parsed.archives:
         aa = dict(a)
         aa["text"] = _clean_strings(a["text"], f"archive '{a['title']}'", redactions)
@@ -156,7 +164,7 @@ def stage(conn: sqlite3.Connection, paths: DataPaths, config: Config, project_id
         cur = conn.execute(
             "INSERT INTO staging(project_id, source_type, items_json, redactions_json, created_at, expires_at)"
             " VALUES (?,?,?,?,?,?)",
-            (project_id, source_type, json.dumps({"title": parsed.title, "source": src, "candidates": cands,
+            (project_id, source_type, json.dumps({"title": parsed.title, "source": neutralize(redact(src)[0]) if src else None, "candidates": cands,
                                                   "archives": archives, "notes": parsed.notes}, ensure_ascii=False),
              json.dumps(redactions), now_iso(), (now + timedelta(hours=ttl)).isoformat(timespec="microseconds")))
     counts: dict[str, int] = {}

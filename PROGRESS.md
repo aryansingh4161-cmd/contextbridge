@@ -2,7 +2,7 @@
 
 Resume from this file alone. Spec: `../ContextBridge_ClaudeCode_Prompt.md`. Blueprint: `docs/BLUEPRINT.md`.
 
-**Current state (2026-10-31):** M1–M6 done. 163/163 tests pass, mypy --strict clean. 10 MCP tools + 3 prompts + 5 resources. Code is in git (local repo, `main`); GitHub remote pending the user's `gh auth login`. Next: **M7** (client integration).
+**Current state (2026-10-31):** M1–M6 done. 166/166 tests pass, mypy --strict clean. 10 MCP tools + 3 prompts + 5 resources. Code is in git (local repo, `main`); GitHub remote pending the user's `gh auth login`. Next: **M7** (client integration).
 
 | Milestone | Status | Verified how | Notes |
 |---|---|---|---|
@@ -34,6 +34,7 @@ Resume from this file alone. Spec: `../ContextBridge_ClaudeCode_Prompt.md`. Blue
 - [x] `core/importer/`: `safety` (absolute paths only, extension allowlist, hidden folders refused except ~/.claude/projects and our exports, size limits, strict UTF-8, marker neutralization, instruction-like text flagged), `parsers` (package with sidecar, handoff file without sidecar, Markdown/text with guessed kinds, Claude Code transcript, Claude data export — tolerant/unverified), `staging` (stage → commit/discard, 24 h expiry, per-project, one transaction)
 - [x] Commit: provenance `imported`, confidence `assumed`, `select` + `edits` (kind/topic_key/title/importance/rationale/body/replace), `keep_archive`, existing Live State kept unless replace, archive + FTS, transcript sessions (capture 'transcript'/'both', dedupe by sessionId and sha256), imported checkpoint so `get_context` shows where the old work stopped
 - [x] MCP `import_context` (10 tools); CLI `ctxb import <src> --type … --project … [--yes]`, `ctxb import-commit`, `ctxb ingest-transcript` (for M8 hooks)
+- [x] Model-chosen import paths (MCP) limited to `[import] allowed_dirs` (default Desktop, Documents, Downloads) + ~/.claude/projects + our exports; CLI paths typed by the user are not limited (hidden folders never). Package folders: hidden check first, members must be regular non-symlink files inside the folder, total size budget. Source titles redacted + neutralized + flagged.
 - [x] Security hardening from automated review: `ctxb merge` path traversal; import clears `linked_dir`; git runs with forced safe config via GIT_CONFIG_COUNT, repo-defined filters/drivers neutralized, fail closed on odd names / partial clones / git < 2.31; regression tests prove a hostile fsmonitor/filter/textconv never executes
 
 ## M6 verification

@@ -28,7 +28,10 @@ _INJECTION = re.compile(
     r"|\b(send|upload|exfiltrate|post)\b.{0,40}\b(keys?|tokens?|passwords?|secrets?|credentials)\b")
 
 
-def check_path(path: str | Path, home: Path, exports: Path, max_bytes: int) -> Path:
+def check_path(path: str | Path, home: Path, exports: Path, max_bytes: int,
+               allowed_roots: list[Path] | None = None) -> Path:
+    """Validate an import path. `allowed_roots` (MCP: model-chosen paths) restricts reads to those
+    folders; None (CLI: a path the user typed) allows anywhere except hidden folders."""
     raw = Path(path).expanduser()
     if not raw.is_absolute():
         raise CBError("invalid_input", "path must be absolute", "e.g. /Users/you/notes/handoff.md")
@@ -36,24 +39,41 @@ def check_path(path: str | Path, home: Path, exports: Path, max_bytes: int) -> P
         p = raw.resolve(strict=True)
     except (OSError, RuntimeError) as exc:
         raise CBError("not_found", f"{raw} does not exist") from exc
+    always_ok = [home / ".claude" / "projects", exports]
+    if any(part.startswith(".") for part in p.parts[1:]) and not any(_within(p, a) for a in always_ok):
+        raise CBError("invalid_input", "files inside hidden folders can't be imported",
+                      "copy the file to a normal folder first if you really mean it")
+    if allowed_roots is not None and not any(_within(p, r) for r in [*allowed_roots, *always_ok]):
+        raise CBError("invalid_input", f"{p} is outside the folders imports may read",
+                      "allowed: " + ", ".join(str(r) for r in allowed_roots)
+                      + " (add folders under [import] allowed_dirs in config.toml, or run `ctxb import` yourself)")
     if p.is_dir():
         if (p / "source_references.json").is_file() or (p / "00_manifest.json").is_file():
-            return p  # a ContextBridge package folder
+            return p  # a ContextBridge package folder; its members are checked by package_files()
         raise CBError("invalid_input", f"{p} is a directory", "pass a file, or a ContextBridge package folder")
     if not p.is_file():
         raise CBError("invalid_input", f"{p} is not a regular file")
     if p.suffix.lower() not in ALLOWED_EXT:
         raise CBError("invalid_input", f"'{p.suffix or p.name}' files can't be imported",
                       f"allowed: {', '.join(sorted(ALLOWED_EXT))}")
-    allowed_hidden = [home / ".claude" / "projects", exports]
-    if any(part.startswith(".") for part in p.parts[1:]) and not any(_within(p, a) for a in allowed_hidden):
-        raise CBError("invalid_input", "files inside hidden folders can't be imported",
-                      "copy the file to a normal folder first if you really mean it")
     size = p.stat().st_size
     if size > max_bytes:
         raise CBError("too_large", f"{p.name} is {size} bytes; the import limit is {max_bytes}",
                       "raise [import] max_bytes in config.toml, or split the file")
     return p
+
+
+def package_member(folder: Path, name: str, budget: list[int]) -> Path:
+    """A file inside a package folder: no symlinks, stays inside, counts against the size budget."""
+    m = folder / name
+    if m.is_symlink() or not m.is_file():
+        raise CBError("invalid_input", f"package member {name} is a symlink or not a regular file")
+    if not m.resolve().is_relative_to(folder.resolve()):
+        raise CBError("invalid_input", f"package member {name} points outside the package")
+    budget[0] -= m.stat().st_size
+    if budget[0] < 0:
+        raise CBError("too_large", "package files exceed the import size limit")
+    return m
 
 
 def _within(p: Path, root: Path) -> bool:

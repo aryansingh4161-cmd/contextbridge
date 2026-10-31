@@ -416,7 +416,7 @@ def cmd_import(args: argparse.Namespace) -> int:
         pid = get_project_id(app.conn, args.project[0])
         src = str(Path(args.source).expanduser().resolve()) if args.source != "-" else None
         text = sys.stdin.read() if args.source == "-" else None
-        staged = imp.stage(app.conn, app.paths, app.config, pid, args.type, path=src, text=text)
+        staged = imp.stage(app.conn, app.paths, app.config, pid, args.type, path=src, text=text, restrict=False)
         if not args.yes:
             print(staged["preview"])
             for n in staged["notes"]:
@@ -470,7 +470,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     app, pid = _project_app(args)
     try:
         staged = imp.stage(app.conn, app.paths, app.config, pid, "transcript_claude_code",
-                           path=str(Path(args.transcript).expanduser().resolve()))
+                           path=str(Path(args.transcript).expanduser().resolve()), restrict=False)
         out = imp.commit(app.conn, pid, staged["staging_id"], select=[])
     finally:
         app.close()
