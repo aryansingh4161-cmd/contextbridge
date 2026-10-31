@@ -12,3 +12,10 @@ no supported mechanism can do that. It makes interruptions cheap: work is saved 
 the unsaved window is always visible, and a handoff is one command away.
 
 Status: early development. See `PROGRESS.md` and `docs/BLUEPRINT.md`.
+
+
+## Install
+
+See **[docs/INSTALL.md](docs/INSTALL.md)** (macOS, step by step): `uv tool install`, then
+`ctxb install-claude-code` and `ctxb install-claude-desktop`. Formats: [docs/FORMAT.md](docs/FORMAT.md).
+Known limits: [docs/LIMITATIONS.md](docs/LIMITATIONS.md). License: MIT.

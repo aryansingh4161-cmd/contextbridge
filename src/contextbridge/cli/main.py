@@ -479,6 +479,63 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _print_install(out: dict[str, Any], as_json: bool) -> None:
+    if as_json:
+        _print_json(out)
+        return
+    for k, v in out.items():
+        if k == "warnings":
+            for w in v:
+                print(f"! {w}")
+        elif isinstance(v, dict):
+            print(f"{k}: " + ", ".join(f"{a}={b}" for a, b in v.items()))
+        elif v is not None and v != []:
+            print(f"{k}: {v}")
+
+
+def cmd_install_desktop(args: argparse.Namespace) -> int:
+    from ..adapters.install import install_desktop
+    from ..core.paths import ensure_layout, resolve_paths
+
+    paths = resolve_paths(args.home)
+    ensure_layout(paths)
+    _print_install(install_desktop(paths, uninstall=args.uninstall, dry_run=args.dry_run), args.json)
+    return EXIT_OK
+
+
+def cmd_install_code(args: argparse.Namespace) -> int:
+    from ..adapters.install import install_code
+    from ..core.paths import ensure_layout, resolve_paths
+
+    paths = resolve_paths(args.home)
+    ensure_layout(paths)
+    _print_install(install_code(paths, uninstall=args.uninstall, dry_run=args.dry_run, hook=not args.no_hook),
+                   args.json)
+    return EXIT_OK
+
+
+def cmd_hook(args: argparse.Namespace) -> int:
+    """Claude Code hook entry point. Never fails the session: errors print nothing and exit 0."""
+    if args.event != "session-start":
+        return EXIT_OK
+    try:
+        from ..adapters.claude_code.hooks import session_start
+
+        text = session_start(sys.stdin.read(), args.home)
+        if text:
+            sys.stdout.write(text + "\n")
+    except Exception as exc:  # noqa: BLE001 (a hook must never break the session)
+        print(f"contextbridge hook skipped: {type(exc).__name__}", file=sys.stderr)
+    return EXIT_OK
+
+
+def cmd_snippet(args: argparse.Namespace) -> int:
+    from ..adapters.snippets import claude_md, desktop_instructions
+
+    print(claude_md(args.project) if args.kind == "claude-md" else desktop_instructions(args.project), end="")
+    return EXIT_OK
+
+
 def cmd_version(_args: argparse.Namespace) -> int:
     from importlib.metadata import version
 
@@ -580,6 +637,19 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("ingest-transcript", cmd_ingest, "archive a Claude Code transcript (.jsonl) into a project")
     sp.add_argument("project")
     sp.add_argument("transcript")
+    for name, fn, what in (("install-claude-desktop", cmd_install_desktop, "Claude Desktop's config"),
+                           ("install-claude-code", cmd_install_code, "Claude Code (user scope)")):
+        sp = add(name, fn, f"add ContextBridge to {what}; merges, backs up first (or --uninstall)")
+        sp.add_argument("--uninstall", action="store_true")
+        sp.add_argument("--dry-run", action="store_true", help="show what would change, change nothing")
+        sp.add_argument("--json", action="store_true")
+        if name == "install-claude-code":
+            sp.add_argument("--no-hook", action="store_true", help="don't add the SessionStart context hook")
+    sp = add("hook", cmd_hook, "Claude Code hook entry point (reads the event JSON on stdin)")
+    sp.add_argument("event", choices=["session-start"])
+    sp = add("snippet", cmd_snippet, "print paste-ready instructions (CLAUDE.md or Desktop project instructions)")
+    sp.add_argument("kind", choices=["claude-md", "desktop"])
+    sp.add_argument("project", help="project slug")
     add("version", cmd_version, "print version")
     return p
 

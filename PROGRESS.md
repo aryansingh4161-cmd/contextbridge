@@ -13,7 +13,7 @@ Resume from this file alone. Spec: `../ContextBridge_ClaudeCode_Prompt.md`. Blue
 | M4 Generation & manual handoff | done | pytest (unit, stdio, CLI), 3 real Claude Code sessions (handoff → resume via connector → resume from file alone) | Acceptance tests 3, 4, 5 (handoff part), 13, 16 covered |
 | M5 Packaging | done | pytest (unit round trips, CLI subprocess migration between two data dirs) | Profiles, splitting, consolidation, manifest/merge done in M4; M5 adds full export/import + round trips |
 | M6 Import | done | pytest (unit, stdio, CLI), 14 real local transcripts parsed, 2 real Claude Code sessions (stage hostile file → commit selected items) | Acceptance Test 8 covered. Claude data-export parser built to a tolerant, UNVERIFIED shape (needs a real export) |
-| M7 Client integration | todo | | V8, V9, V11; SessionStart hook; install via `uv tool install` (non-editable) |
+| M7 Client integration | in progress | pytest (fake HOME + fake `claude`), `uv tool install` into a temp dir, real Claude Code session with the SessionStart hook | Remaining: real install on the user's Mac + Desktop checks (V8 instructions/prompts, V9 tools, account switch) with the user |
 | M8 Budget monitor | todo | | |
 | M9 Hardening & docs | todo | | |
 
@@ -28,6 +28,19 @@ Resume from this file alone. Spec: `../ContextBridge_ClaudeCode_Prompt.md`. Blue
 - [x] MCP server (stdio, `mcp` 2.3 `MCPServer`) with instructions, `list_projects`, `create_project`; CBError → structured tool error
 - [x] CLI `ctxb init | projects | doctor | version` (stdlib-only import path)
 - [x] `make_slug`: NFKD accent stripping; non-ASCII-only names refused → explicit slug
+
+## M7 tasks
+- [x] Verified (docs, 2026-10-31): SessionStart hook config shape, stdin fields (`cwd`, `source`…), plain stdout → context, 10,000-char cap; `claude mcp add --transport stdio --scope user <name> -- <cmd>` stored in ~/.claude.json
+- [x] `ctxb install-claude-desktop` / `install-claude-code` (`--dry-run`, `--uninstall`, `--no-hook`): merge, never rewrite; backup to backups/client-configs (600); atomic write keeping file mode; refuse invalid JSON / wrong shapes; idempotent; iCloud-path warning for the binary
+- [x] `ctxb hook session-start`: finds the project linked to cwd (closest ancestor), prints its brief context (≤ 9,500 chars) wrapped as memory data; never fails the session (exit 0, empty output on any error)
+- [x] `ctxb snippet claude-md|desktop <slug>`; `docs/INSTALL.md`; README install section; doctor reports hook + linked folders
+- [ ] Real install on the user's Mac (`uv tool install`, both installers) — needs the user's go-ahead
+- [ ] Claude Desktop manual checks with the user: tools visible, server instructions/prompts honoured (V8/V9), config survives an account switch
+
+## M7 verification (so far)
+- `uv run pytest`: 172 passed. New: Desktop merge keeps other servers/keys, backup byte-identical and 600, original file mode kept, dry run changes nothing, idempotent, uninstall restores the original exactly, invalid JSON and wrong shapes refused untouched, custom data dir → `env`; Claude Code: exact verified `claude mcp add` arguments, hook merged next to existing SessionStart/PreToolUse hooks and other settings, idempotent, uninstall removes only ours; hook output for a linked subfolder, nothing for unrelated folders or bad input; the installer's shell-quoted hook command runs via `sh -c` from a path containing an apostrophe; a broken data dir yields exit 0 and no output.
+- `uv tool install .` into a temp tool dir: both executables work outside the iCloud folder.
+- Real Claude Code session with only the SessionStart hook (via `--settings`, user settings untouched), started in a subfolder of a linked project, no tools: correctly stated the project, next action and the rejected framework.
 
 ## M6 tasks
 - [x] Verified Claude Code transcript format on this Mac (Claude Code 2.1.316): JSONL; `user`/`assistant` records with `message.role` + `message.content` (string or blocks `text`/`thinking`/`tool_use`/`tool_result`); `isSidechain`, `isCompactSummary`, `ai-title`, `sessionId`, `timestamp`; many metadata record types (ignored)

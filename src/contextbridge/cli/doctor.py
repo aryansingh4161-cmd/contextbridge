@@ -98,7 +98,7 @@ def run_doctor(home: str | None) -> Report:
 
         backups = sorted(app.paths.backups.glob("*.db"))
         r.add("backups", "info", f"{len(backups)} file(s) in backups/" if backups else
-              "none yet (created before each migration; scheduled backups come in M3)")
+              "none yet (created before each migration and daily when in use)")
 
         for label, path in [("Claude Desktop", DESKTOP_CONFIG), ("Claude Code (user scope)", CLAUDE_CODE_USER_CONFIG)]:
             found = _has_server(path)
@@ -106,7 +106,17 @@ def run_doctor(home: str | None) -> Report:
                 r.add(f"client: {label}", "info", "config not found")
             else:
                 r.add(f"client: {label}", "ok" if found else "info",
-                      "contextbridge configured" if found else "contextbridge not configured yet (M7 installer)")
+                      "contextbridge configured" if found else "contextbridge not configured (ctxb install-claude-"
+                      + ("desktop)" if label == "Claude Desktop" else "code)"))
+        settings = Path.home() / ".claude" / "settings.json"
+        try:
+            hook = "hook session-start" in settings.read_text(encoding="utf-8")
+        except OSError:
+            hook = False
+        r.add("client: Claude Code SessionStart hook", "ok" if hook else "info",
+              "installed (loads linked projects' context)" if hook else "not installed (optional)")
+        linked = app.conn.execute("SELECT count(*) FROM projects WHERE linked_dir IS NOT NULL").fetchone()[0]
+        r.add("linked folders", "info", f"{linked} project(s) linked to a folder (ctxb link)")
     finally:
         app.close()
     return r
