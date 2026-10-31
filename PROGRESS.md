@@ -2,7 +2,7 @@
 
 Resume from this file alone. Spec: `docs/SPEC.md` (copy of `../ContextBridge_ClaudeCode_Prompt.md`). Blueprint: `docs/BLUEPRINT.md`. Acceptance map: `docs/ACCEPTANCE.md`.
 
-**Current state (2026-10-31):** **MVP complete: M0–M9 done.** 215/215 tests pass (unit, integration over real stdio, acceptance incl. SIGKILL tests), mypy --strict clean. 13 MCP tools + 3 prompts + 5 resources (attach_file added post-MVP). All 24 acceptance tests mapped and passing (`docs/ACCEPTANCE.md`). Installed on the user's Mac (Claude Code: MCP + hooks + status line; Claude Desktop) (updated to the M9 version by the user on 2026-10-31). Code: https://github.com/aryansingh4161-cmd/contextbridge (public, MIT, branch `main`). Open items: see *Known issues / open items* at the end.
+**Current state (2026-10-31):** **MVP complete: M0–M9 done.** 225/225 tests pass (unit, integration over real stdio, acceptance incl. SIGKILL tests), mypy --strict clean. 13 MCP tools + 3 prompts + 5 resources (attach_file added post-MVP). All 24 acceptance tests mapped and passing (`docs/ACCEPTANCE.md`). Installed on the user's Mac (Claude Code: MCP + hooks + status line; Claude Desktop) (updated to the M9 version by the user on 2026-10-31). Code: https://github.com/aryansingh4161-cmd/contextbridge (public, MIT, branch `main`). Open items: see *Known issues / open items* at the end.
 
 | Milestone | Status | Verified how | Notes |
 |---|---|---|---|
