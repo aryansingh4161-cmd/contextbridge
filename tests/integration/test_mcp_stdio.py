@@ -26,7 +26,7 @@ async def test_tools_listed_with_instructions(home: Path) -> None:
         tools = {t.name: t for t in (await c.list_tools()).tools}
         assert set(tools) == {"list_projects", "create_project", "remember", "search_memory",
                               "resolve_conflict", "update_state", "checkpoint", "get_context", "prepare_handoff",
-                              "import_context", "get_budget_status"}
+                              "import_context", "get_budget_status", "forget"}
         assert "name" in tools["create_project"].input_schema["required"]
         assert c.instructions and "explicit `project`" in c.instructions
 

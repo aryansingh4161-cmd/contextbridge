@@ -416,6 +416,36 @@ def build_server(app: App) -> MCPServer:
                 out["checkpoint_status"] = checkpoint_status(conn, pid)
         return out
 
+    @server.tool(
+        name="forget",
+        description=(
+            "Delete an entry, a session, or a whole project, ONLY when the user explicitly asks. Say exactly what "
+            "will be deleted and get their yes first, then pass confirm=true. A recovery point is always made first "
+            "(knowledge snapshot, or a full archive for a project). Deleting a project also needs "
+            "confirm_project_name = the project's exact name, typed by the user. Permanent removal is CLI-only "
+            "(`ctxb purge`)."
+        ),
+        annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=False,
+                                    open_world_hint=False),
+    )
+    @_tool_errors
+    def forget(
+        project: Slug,
+        target_type: Literal["entry", "session", "project"],
+        confirm: Annotated[bool, Field(description="Must be true; only after the user agreed")],
+        target_id: Annotated[int | None, Field(description="Entry or session id (not for project)")] = None,
+        confirm_project_name: Annotated[str | None, Field(max_length=120,
+                                                          description="Exact project name (project only)")] = None,
+    ) -> dict[str, Any]:
+        from ..core.forget import forget as do_forget
+
+        with app.db() as conn:
+            pid = proj.get_project_id(conn, project)
+            out = do_forget(conn, app.paths, pid, target_type, target_id, confirm=confirm,
+                            confirm_project_name=confirm_project_name)
+        log.info("event=forget target_type=%s", target_type)
+        return out
+
     # ---------------------------------------------------------------- prompts (user-invocable)
 
     @server.prompt(name="resume", title="Resume a project",

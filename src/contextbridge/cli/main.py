@@ -634,6 +634,82 @@ def cmd_snippet(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_delete(args: argparse.Namespace) -> int:
+    from ..core.forget import forget
+
+    app, pid = _project_app(args)
+    try:
+        if args.entry is None and args.session is None:
+            name = app.conn.execute("SELECT name FROM projects WHERE id = ?", (pid,)).fetchone()[0]
+            if not args.yes:
+                typed = input(f"Delete the WHOLE project '{name}'? Type its exact name to confirm: ")
+            else:
+                typed = args.confirm_name or ""
+            out = forget(app.conn, app.paths, pid, "project", None, confirm=True, confirm_project_name=typed)
+        else:
+            if not args.yes:
+                raise CBError("confirm_required", "add --yes to delete (a recovery snapshot is made first)")
+            kind, tid = ("entry", args.entry) if args.entry is not None else ("session", args.session)
+            out = forget(app.conn, app.paths, pid, kind, tid, confirm=True)
+    finally:
+        app.close()
+    _print_json(out)
+    return EXIT_OK
+
+
+def cmd_purge(args: argparse.Namespace) -> int:
+    from ..core.forget import purge, purge_entry
+
+    if not args.yes:
+        raise CBError("confirm_required", "purge is PERMANENT (no recovery point); add --yes if you are sure")
+    from ..core.app import open_app
+
+    app = open_app(args.home, log_to_stderr=False, maintenance=False)
+    try:
+        if args.entry is not None:
+            from ..core.projects import get_project_id
+
+            out = purge_entry(app.conn, app.paths, get_project_id(app.conn, args.project), args.entry)
+        else:
+            out = purge(app.conn, app.paths, args.project)
+    finally:
+        app.close()
+    _print_json(out)
+    return EXIT_OK
+
+
+def cmd_remember(args: argparse.Namespace) -> int:
+    from ..core.knowledge import EntryIn, remember
+
+    app, pid = _project_app(args)
+    try:
+        res = remember(app.conn, pid, [EntryIn(kind=args.kind, topic_key=args.topic, title=args.title,
+                                               body=args.body or "", rationale=args.why, provenance="user_stated",
+                                               importance=args.importance)], session_label=args.session, client="cli")
+    finally:
+        app.close()
+    r = res.results[0]
+    print(f"{r.status}" + (f": entry {r.id}" if r.id else "") + (f" ({r.reason})" if r.reason else "")
+          + (f"; conflict {r.conflict_id}: resolve with your assistant" if r.conflict_id else ""))
+    return EXIT_OK if r.status != "rejected" else EXIT_ERR
+
+
+def cmd_migrate(args: argparse.Namespace) -> int:
+    """Apply pending schema migrations (normally automatic at startup) and report the schema state."""
+    from ..core.app import open_app
+    from ..core.db.migrate import applied_versions, available_migrations, verify_checksums
+
+    app = open_app(args.home, log_to_stderr=False, maintenance=False)
+    try:
+        applied = applied_versions(app.conn)
+        drift = verify_checksums(app.conn)
+    finally:
+        app.close()
+    print(f"schema: {len(applied)}/{len(available_migrations())} migrations applied"
+          + (f"; CHECKSUM DRIFT: {drift}" if drift else "; checksums ok"))
+    return EXIT_ERR if drift else EXIT_OK
+
+
 def cmd_version(_args: argparse.Namespace) -> int:
     from importlib.metadata import version
 
@@ -771,6 +847,28 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("snippet", cmd_snippet, "print paste-ready instructions (CLAUDE.md or Desktop project instructions)")
     sp.add_argument("kind", choices=["claude-md", "desktop"])
     sp.add_argument("project", help="project slug")
+    sp = add("delete", cmd_delete, "delete an entry, a session, or (no flags) a whole project; recovery point first")
+    sp.add_argument("project")
+    sp.add_argument("--entry", type=int)
+    sp.add_argument("--session", type=int)
+    sp.add_argument("--yes", action="store_true")
+    sp.add_argument("--confirm-name", help="with --yes, the exact project name (non-interactive)")
+    sp = add("purge", cmd_purge, "PERMANENTLY remove a project (or --entry) incl. snapshots, exports and backups")
+    sp.add_argument("project")
+    sp.add_argument("--entry", type=int)
+    sp.add_argument("--yes", action="store_true")
+    sp = add("remember", cmd_remember, "save one knowledge entry by hand (provenance user_stated)")
+    sp.add_argument("project")
+    sp.add_argument("--kind", required=True, choices=["requirement", "decision", "rejected_approach", "constraint",
+                                                      "preference", "fact", "explanation", "bug", "fix", "lesson",
+                                                      "milestone", "risk", "open_question", "reference", "convention"])
+    sp.add_argument("--topic", required=True, help="dotted topic key, e.g. backend.framework")
+    sp.add_argument("--title", required=True)
+    sp.add_argument("--body")
+    sp.add_argument("--why", help="rationale (required for decisions and rejected approaches)")
+    sp.add_argument("--importance", default="important", choices=["critical", "important", "optional"])
+    sp.add_argument("--session")
+    add("migrate", cmd_migrate, "apply pending schema migrations and verify checksums")
     add("version", cmd_version, "print version")
     return p
 
