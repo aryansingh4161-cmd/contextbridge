@@ -4,7 +4,8 @@ The budget decides how much DETAIL goes into the primary file, never which histo
 everything left out of the primary file is in the companion files, and the primary file says so.
 
 Order of inclusion:
-1. mandatory: every critical live entry as at least a one-line digest with its tag, the evolution
+1. mandatory: every critical live entry and every open question as at least a one-line digest with its tag
+   (decision digests keep a short "why"), the evolution
    chain of every critical topic, open conflicts, where-stopped / next action (always rendered);
 2. then greedy by priority: digests of the remaining entries (score), full detail (0.6 × score,
    +50 for critical), evolution chains (0.8 × score of the head);
@@ -103,7 +104,8 @@ def select(data: ProjectData, budget: int, level: str, render: Callable[[Selecti
     detail: dict[int, Detail] = {}
     heads: set[int] = set()
     for _, e in ranked:
-        if e["importance"] == "critical" and e["status"] in LIVE:
+        # mandatory: every critical live entry, and every open question (the resume flow must name them)
+        if e["status"] in LIVE and (e["importance"] == "critical" or e["kind"] == "open_question"):
             detail[e["id"]] = "digest"
     for h, chain in chains.items():
         if chain[-1]["importance"] == "critical" or any(c["importance"] == "critical" for c in chain):

@@ -94,9 +94,15 @@ def _marks(e: dict[str, Any]) -> str:
     return (" — " + ", ".join(m)) if m else ""
 
 
+DIGEST_WHY = 140  # a decision without its reason gets re-argued: keep a short "why" even in one-line form
+
+
 def entry_md(e: dict[str, Any], detail: Detail) -> str:
     if detail == "digest":
-        return f"- {e['tag']} {e['title']}{_marks(e)}\n"
+        why = ""
+        if e["kind"] in ("decision", "rejected_approach") and e.get("rationale"):
+            why = f" — why: {_why(e, DIGEST_WHY)}"
+        return f"- {e['tag']} {e['title']}{_marks(e)}{why}\n"
     out = [f"- {e['tag']} **{e['title']}**{_marks(e)}  "]
     if e.get("rationale"):
         out.append(f"  Why: {e['rationale']}  ")

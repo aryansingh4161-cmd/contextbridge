@@ -281,3 +281,20 @@ def test_empty_project_handoff_is_honest(app: App) -> None:
     assert "No checkpoint has been saved yet" in primary
     assert any("next action" in m for m in out["report"]["missing"])
     assert "complete: false" in primary
+
+
+def test_brief_keeps_decision_reasons_and_open_questions(app: App) -> None:
+    pid, _ = five_sessions(app)
+    kn.remember(app.conn, pid, [E(kind="open_question", topic_key="ocr.vendor", title="Which OCR vendor handles seals?",
+                                  importance="optional")])
+    for start in (0, 40):
+        kn.remember(app.conn, pid, [E(kind="fact", topic_key=f"misc.f{i}", title=f"filler {i}", body="x " * 300,
+                                      importance="important") for i in range(start, start + 40)])
+    b = get_context(app.conn, app.paths, app.config, pid, scope="brief", budget_tokens=1500)["content"]
+    assert "Which OCR vendor handles seals?" in b, "open questions are mandatory, even optional ones"
+    assert "Use FastAPI for the backend" in b and "why: async io" in b.lower(), "a decision keeps its reason"
+    from contextbridge.core.generation.render import entry_md
+    d = entry_md({"tag": "[D-0001 · user_stated · 2026-10-31]", "title": "Use FastAPI", "kind": "decision",
+                  "rationale": "async IO for OCR calls", "importance": "important", "provenance": "user_stated",
+                  "status": "active", "confidence": "confirmed"}, "digest")
+    assert d.strip().endswith("— why: async IO for OCR calls"), "the one-line form keeps the reason too"
