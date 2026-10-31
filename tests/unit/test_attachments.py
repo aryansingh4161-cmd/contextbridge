@@ -297,11 +297,14 @@ def test_secret_scan_is_content_based_and_fails_closed() -> None:
     # PDFs with fonts hold text as glyph codes we can't read → can't vouch (fail closed only where required)
     font_pdf = b"%PDF-1.4\n1 0 obj\n<< /Type /Font /Subtype /TrueType >>\nendobj\n%%EOF"
     assert att.has_secrets(font_pdf, "pdf", fail_closed=True) and not att.has_secrets(font_pdf, "pdf")
-    # other text-capable filters can't be vouched for; image-only filters are fine
-    lzw = b"%PDF-1.4\n<< /Filter /LZWDecode >>\nstream\nxxxx\nendstream\n%%EOF"
-    assert att.has_secrets(lzw, "pdf", fail_closed=True)
-    jpg = b"%PDF-1.4\n<< /Filter /DCTDecode >>\nstream\n\xff\xd8\xff\nendstream\n%%EOF"
-    assert not att.has_secrets(jpg, "pdf", fail_closed=True)
+    # without a PDF text extractor NO PDF is vouched for where we must fail closed (any filter, any trick) …
+    for trick in (b"%PDF-1.4\n<< /Filter /LZWDecode >>\nstream\nxxxx\nendstream\n%%EOF",
+                  b"%PDF-1.4\n<< /Filter /DCTDecode >>\nstream\n\xff\xd8\xff\nendstream\n%%EOF",
+                  b"%PDF-1.4\n<< /Length 9 /Filter [] >> << >>\nstream\nBT (x) Tj ET\nendstream\n%%EOF",
+                  b"junk then %PDF-1.4 hidden header"):
+        assert att.has_secrets(trick, "pdf", fail_closed=True) and att.has_secrets(trick, "bin", fail_closed=True)
+    # … while the warn-only scan still finds a key in a Flate stream (shown above) and stays quiet otherwise
+    assert not att.has_secrets(font_pdf, "pdf")
     # nested archives are opened; too-deep nesting can't be vouched for
     inner = io.BytesIO()
     with zipfile.ZipFile(inner, "w") as z:

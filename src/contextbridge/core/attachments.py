@@ -70,9 +70,25 @@ def _scan_text(text: str, *, entropy: bool) -> bool:
 
 
 MAX_DEPTH = 3
-IMAGE_FILTERS = (b"DCTDecode", b"JPXDecode", b"CCITTFaxDecode", b"JBIG2Decode")
-_STREAM_KW = re.compile(rb"\bstream\r?\n")
-_FILTER = re.compile(rb"/Filter\s*(\[[^\]]*\]|/[A-Za-z0-9]+)")
+
+
+def _is_pdf(data: bytes, ext: str) -> bool:
+    return ext == "pdf" or b"%PDF-" in data[:1024]
+
+
+def _pdf_best_effort(data: bytes) -> bool:
+    """Warn-only scan of a PDF: raw bytes plus every stream that inflates as zlib. NOT a guarantee: text in
+    PDFs is usually font glyph codes, so this can't prove a PDF clean (has_secrets fails closed for PDFs)."""
+    import zlib
+
+    for m in _PDF_STREAM.finditer(data):
+        try:
+            chunk = zlib.decompressobj().decompress(m.group(1), INSPECT_MAX)
+        except zlib.error:
+            continue
+        if PEM_PRIVATE.search(chunk) or _scan_text(chunk.decode("utf-8", errors="replace"), entropy=False):
+            return True
+    return False
 
 
 def _is_zip(data: bytes) -> bool:
@@ -113,45 +129,8 @@ def _inner_texts(data: bytes, ext: str, depth: int = 0, budget: list[int] | None
                 return out
         except (zipfile.BadZipFile, OSError, RuntimeError, NotImplementedError, ValueError):
             return None
-    if ext == "pdf" or data[:5] == b"%PDF-":
-        if b"/Font" in data:
-            # Text in real PDFs is stored as font glyph codes (verified with a CoreGraphics-made PDF: a key on
-            # the page was not visible in the decoded streams). Without a full text extractor we can't vouch.
-            return None
-        matches = list(_PDF_STREAM.finditer(data))
-        if len(matches) != len(_STREAM_KW.findall(data)):
-            return None  # a stream we can't delimit
-        out = []
-        for m in matches:
-            head = data[max(0, m.start() - 2048):m.start()]
-            dict_start = head.rfind(b"<<")
-            filters = _FILTER.findall(head[dict_start:] if dict_start >= 0 else head)
-            names = re.findall(rb"/([A-Za-z0-9]+)", filters[-1]) if filters else []
-            raw = m.group(1)
-            if not names:
-                inflated = raw
-            elif names == [b"FlateDecode"]:
-                try:
-                    d = zlib.decompressobj()
-                    inflated = d.decompress(raw, max(budget[0], 1))
-                    if d.unconsumed_tail:
-                        return None  # over budget
-                except zlib.error:
-                    return None
-            elif names[-1] in IMAGE_FILTERS and all(n in (b"FlateDecode", *IMAGE_FILTERS) for n in names):
-                continue  # image data (JPEG/JPEG2000/fax/JBIG2): no readable text to hide a secret in
-            else:
-                return None  # text-capable filters we don't decode (LZW, ASCII85, chains…): can't vouch
-            budget[0] -= len(inflated)
-            if budget[0] < 0:
-                return None
-            out.append(inflated)
-            if _is_zip(inflated) or inflated[:5] == b"%PDF-":
-                nested = _inner_texts(inflated, "", depth + 1, budget)
-                if nested is None:
-                    return None
-                out += nested
-        return out
+    if _is_pdf(data, ext):
+        return None  # no PDF text extractor: a PDF can never be vouched for (see has_secrets for best effort)
     return []
 
 
@@ -165,6 +144,8 @@ def has_secrets(data: bytes, ext: str, *, fail_closed: bool = False) -> bool:
     text_like = ext in TEXT_EXT or ext == "rtf"
     if _scan_text(data.decode("utf-8", errors="replace"), entropy=text_like):
         return True
+    if _is_pdf(data, ext):
+        return True if fail_closed else _pdf_best_effort(data)
     inner = _inner_texts(data, ext)
     if inner is None:
         return fail_closed
