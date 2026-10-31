@@ -1,5 +1,7 @@
 # Installing ContextBridge (macOS, beginner-friendly)
 
+If something doesn't work, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md) (start with `ctxb doctor`).
+
 Everything runs on your Mac. Nothing is sent anywhere, and no API key is needed. Commands go in
 **Terminal** (press ⌘-Space, type "Terminal", press Return). Copy each command, paste it, press
 Return. You can also run them inside Claude Code by typing `!` first (for example `! ctxb doctor`).

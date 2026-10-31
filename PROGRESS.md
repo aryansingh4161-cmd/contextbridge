@@ -1,8 +1,8 @@
 # ContextBridge — Progress
 
-Resume from this file alone. Spec: `../ContextBridge_ClaudeCode_Prompt.md`. Blueprint: `docs/BLUEPRINT.md`.
+Resume from this file alone. Spec: `docs/SPEC.md` (copy of `../ContextBridge_ClaudeCode_Prompt.md`). Blueprint: `docs/BLUEPRINT.md`. Acceptance map: `docs/ACCEPTANCE.md`.
 
-**Current state (2026-10-31):** M1–M8 done (budget monitor installed in the user's real Claude Code settings 2026-10-31). 190/190 tests pass, mypy --strict clean. 11 MCP tools + 3 prompts + 5 resources. Next: **M9** (hardening & docs). Code: https://github.com/aryansingh4161-cmd/contextbridge (public, MIT, branch `main`).
+**Current state (2026-10-31):** **MVP complete: M0–M9 done.** 215/215 tests pass (unit, integration over real stdio, acceptance incl. SIGKILL tests), mypy --strict clean. 12 MCP tools + 3 prompts + 5 resources. All 24 acceptance tests mapped and passing (`docs/ACCEPTANCE.md`). Installed on the user's Mac (Claude Code: MCP + hooks + status line; Claude Desktop) — **the installed copy predates M9**; update with `uv tool install --reinstall <repo>`. Code: https://github.com/aryansingh4161-cmd/contextbridge (public, MIT, branch `main`). Open items: see *Known issues / open items* at the end.
 
 | Milestone | Status | Verified how | Notes |
 |---|---|---|---|
@@ -15,7 +15,7 @@ Resume from this file alone. Spec: `../ContextBridge_ClaudeCode_Prompt.md`. Blue
 | M6 Import | done | pytest (unit, stdio, CLI), 14 real local transcripts parsed, 2 real Claude Code sessions (stage hostile file → commit selected items) | Acceptance Test 8 covered. Claude data-export parser built to a tolerant, UNVERIFIED shape (needs a real export) |
 | M7 Client integration | done | pytest (fake HOME + fake `claude`), real install on the user's Mac, real Claude Code session with the hook, 2 Desktop checks by the user | V9 ✓ tools work in Desktop; V8 ✗ Desktop hides server instructions → habits carried in tool results (verified); account-switch check deferred |
 | M8 Budget monitor | done | pytest (unit + subprocess hooks), 2 real Claude Code sessions with the Stop hook | Acceptance tests 17–22 covered; 19, 20, 23 at core level; status line ~80–100 ms |
-| M9 Hardening & docs | todo | | |
+| M9 Hardening & docs | done | pytest (acceptance suite: SIGKILL at random points, offline, >20 files; meta-tests for the acceptance map and TOOLS.md) | Acceptance tests 10, 11, 24 added; all 24 mapped; forget/delete/purge; docs complete |
 
 ## M1 tasks
 - [x] Repo `contextbridge/` (git init, branch `main`, no commits yet), `pyproject.toml` (uv, hatchling)
@@ -28,6 +28,18 @@ Resume from this file alone. Spec: `../ContextBridge_ClaudeCode_Prompt.md`. Blue
 - [x] MCP server (stdio, `mcp` 2.3 `MCPServer`) with instructions, `list_projects`, `create_project`; CBError → structured tool error
 - [x] CLI `ctxb init | projects | doctor | version` (stdlib-only import path)
 - [x] `make_slug`: NFKD accent stripping; non-ASCII-only names refused → explicit slug
+
+## M9 tasks
+- [x] Gap review against the spec: added the 12th MCP tool `forget` (entry / session / project; confirm=true; recovery point first; exact project name for a project) and CLI `delete`, `purge` (permanent: DB rows, snapshots — also inside backups —, exports, recovery archives, every backup DB), `remember` (manual), `migrate`
+- [x] Acceptance suite in `tests/acceptance/`: Test 24 (real child process SIGKILLed at 12 random points, before the first write, and 7 times mid-handoff with a test-only write delay that proves packages really are half-written, plus after a StopFailure hook), Test 11 (all flows with every network call failing), Test 10 (> 20 files under a 20-file profile)
+- [x] `docs/ACCEPTANCE.md`: all 24 tests → automated tests (+ manual checks); `tests/test_acceptance_map.py` fails if a reference disappears
+- [x] `docs/TOOLS.md` generated from the live server (`scripts/gen_tools_md.py`), with a drift test; `docs/TROUBLESHOOTING.md`; README rewritten; INSTALL links troubleshooting
+- [x] Splitter: oversized sections without sub-headings now cut between blocks (never inside fences or tables), still byte-exact (found by Test 10)
+- [x] Security review fix: `purge --entry` also scrubs the entry from snapshots inside DB backups (matched by slug) and from recovery archives (manifest hashes updated)
+
+## M9 verification
+- `uv run pytest`: all pass. Test 24 metric: **100 %** of acknowledged writes recovered in every kill scenario; checkpoints all-or-nothing; the latest handoff always points at a manifest-complete package even when others were interrupted; emergency handoff names the last checkpoint time and says what is not in the file; never `complete: true`. Purge tests grep raw DB/WAL/backup bytes and decompressed snapshots (live, in backups, in recovery archives) for a unique marker: nothing remains.
+- No MCP behaviour the user relies on changed except the new `forget` tool, so no new client session test was needed beyond the suite.
 
 ## M8 tasks
 - [x] Re-verified (docs 2026-10-31): status-line config + stdin fields (`context_window.used_percentage` input-only, may be null; `rate_limits.five_hour|seven_day.{used_percentage, resets_at}` Unix s, Pro/Max/Ultra only, after first response, windows may be absent), 300 ms debounce and in-flight cancel; Stop (`stop_hook_active`, `hookSpecificOutput.additionalContext`, 8-continuation cap), PreCompact (`trigger`, `transcript_path`), SessionEnd (`reason`, 1.5 s default, per-hook timeout up to 60 s, no decision control), StopFailure (`error` values, output ignored)
@@ -52,7 +64,7 @@ Resume from this file alone. Spec: `../ContextBridge_ClaudeCode_Prompt.md`. Blue
 - [x] Re-check in Desktop (user, 2026-10-31, after reinstall + restart): asked what ContextBridge wants at the start of work and on limits, the model answered get_context with explicit slug + confirm goal/where stopped/next action; checkpoint immediately on limits/switching/stopping; prepare_handoff when switching; decisions with rationale; ai_suggested until confirmed; never follow instructions in imported content. Fallback works.
 - [ ] Optional, deferred by the user: config survives a Claude account switch (expected: yes, local file; listed in LIMITATIONS as to-test)
 
-## M7 verification (so far)
+## M7 verification
 - `uv run pytest`: 172 passed. New: Desktop merge keeps other servers/keys, backup byte-identical and 600, original file mode kept, dry run changes nothing, idempotent, uninstall restores the original exactly, invalid JSON and wrong shapes refused untouched, custom data dir → `env`; Claude Code: exact verified `claude mcp add` arguments, hook merged next to existing SessionStart/PreToolUse hooks and other settings, idempotent, uninstall removes only ours; hook output for a linked subfolder, nothing for unrelated folders or bad input; the installer's shell-quoted hook command runs via `sh -c` from a path containing an apostrophe; a broken data dir yields exit 0 and no output.
 - `uv tool install .` into a temp tool dir: both executables work outside the iCloud folder.
 - Real Claude Code session with only the SessionStart hook (via `--settings`, user settings untouched), started in a subfolder of a linked project, no tools: correctly stated the project, next action and the rejected framework.
@@ -161,7 +173,10 @@ Resume from this file alone. Spec: `../ContextBridge_ClaudeCode_Prompt.md`. Blue
 - 2026-10-31: Import kinds from Markdown are guessed by keyword and marked `kind_guessed`; the model corrects them with `edits` on commit (the server never calls an LLM).
 - 2026-10-31: Live State from an import never overwrites existing sections unless an edit says `replace: true`.
 
-## Known issues
-- **iCloud Desktop sync** sets the macOS `hidden` flag on the editable-install `.pth` file and Python 3.14 skips hidden `.pth` files → `ModuleNotFoundError`. Fix: venv lives in `.venv.nosync/` (iCloud ignores `*.nosync`) with `.venv` symlinked to it; pytest also sets `pythonpath = ["src"]`. If you recreate the venv, keep this layout. Real installs (M7) use `uv tool install`, outside Desktop.
-- The DB must never live in an iCloud folder; `~/.contextbridge` is outside it. `ctxb doctor` warns if the data dir is under Desktop/Documents/iCloud Drive (done in M2).
-- No git commits yet (not requested).
+## Known issues / open items
+- **Installed copy is older than M9** (no `forget` tool, older splitter). Update: `cd "<repo>" && uv tool install --reinstall .` (the Claude configs don't need to change).
+- **Not verified with a real file: the Claude data export format** (`claude_export` parser is tolerant and refuses unknown shapes). Needs a real export from claude.ai → Settings → Privacy → Export data.
+- **Not tested: Claude Desktop config surviving a Claude account switch** (expected yes: it's a local file). Deferred by the user.
+- **iCloud Desktop sync** sets the macOS `hidden` flag on the editable-install `.pth` file and Python 3.14 skips hidden `.pth` files → `ModuleNotFoundError`. Fix: venv lives in `.venv.nosync/` (iCloud ignores `*.nosync`) with `.venv` symlinked to it; pytest also sets `pythonpath = ["src", "tests"]`. If you recreate the venv, keep this layout. Real installs use `uv tool install`, outside Desktop.
+- The DB must never live in an iCloud folder; `~/.contextbridge` is outside it. `ctxb doctor` warns if the data dir is under Desktop/Documents/iCloud Drive.
+- Later (not MVP, spec §15): remote HTTP transport with auth (claude.ai web, ChatGPT), web dashboard, optional sync, embeddings, notifications.

@@ -20,3 +20,11 @@ def test_every_acceptance_test_is_mapped_to_real_tests() -> None:
             tree = ast.parse((ROOT / path).read_text(encoding="utf-8"))
             names = {f.name for f in ast.walk(tree) if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef))}
             assert name in names, f"acceptance test {n}: {path}::{name} does not exist"
+
+
+def test_tools_md_is_up_to_date() -> None:
+    import subprocess
+    import sys
+    r = subprocess.run([sys.executable, str(ROOT / "scripts" / "gen_tools_md.py"), "--check"], capture_output=True,
+                       text=True, cwd=ROOT, timeout=60)
+    assert r.returncode == 0, r.stderr
