@@ -357,6 +357,8 @@ def files_md(data: ProjectData, cap: int | None = None) -> str:
                                                                        if ch else "") + "\n")
             if r.get("diffstat"):
                 out.append(f"- Diff summary: {r['diffstat']}\n")
+            if r.get("warning"):
+                out.append(f"- ⚠ {r['warning']}\n")
     for f in data.file_refs:
         out.append(f"- `{f['path']}`: {f.get('purpose') or ''} (included: {'yes' if f['included_in_exports'] else 'no'}; "
                    f"required: {'yes' if f['required'] else 'no'})\n")

@@ -236,3 +236,27 @@ def test_git_never_runs_repo_configured_programs(tmp_path: Path) -> None:
     info = repo_summary(str(repo))
     assert info is not None and "a.txt" in info["changes"], info
     assert not marker.exists(), "a repo-configured program was executed"
+
+
+@pytest.mark.parametrize("setup", ["partial_clone", "odd_name"])
+def test_git_fails_closed_on_risky_repo_config(tmp_path: Path, setup: str) -> None:
+    import subprocess
+    from contextbridge.core.repo import repo_summary
+    repo, marker = tmp_path / "r", tmp_path / "PWNED"
+    repo.mkdir()
+    g = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True)  # noqa: E731
+    g("init", "-q")
+    hook = tmp_path / "hook.sh"
+    hook.write_text(f"#!/bin/sh\ntouch {marker}\ncat\n")
+    hook.chmod(0o755)
+    (repo / "a.txt").write_text("x")
+    if setup == "partial_clone":
+        g("config", "extensions.partialClone", "origin")
+        g("config", "remote.origin.promisor", "true")
+        g("config", "remote.origin.url", f"ext::{hook}")
+    else:
+        g("config", "filter.a=b c.clean", str(hook))
+        (repo / ".gitattributes").write_text("*.txt filter=a=b\n")
+    info = repo_summary(str(repo))
+    assert info is not None and "skipped for safety" in info.get("warning", "")
+    assert not marker.exists()
