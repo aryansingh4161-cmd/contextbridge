@@ -30,7 +30,7 @@ from ..core.status import checkpoint_status
 from ..core.app import App, open_app
 from ..core.errors import CBError
 from ..core.logging_setup import get_logger
-from .instructions import INSTRUCTIONS
+from .instructions import INSTRUCTIONS, USAGE
 from ..core.importer import staging as imp
 from .prompts import checkpoint_prompt, handoff_prompt, resume_prompt
 from .schemas import EntryInput, FinalUpdates, ImportEdit, SectionInput, SectionName, TaskInput
@@ -79,7 +79,7 @@ def build_server(app: App) -> MCPServer:
     ) -> dict[str, Any]:
         with app.db() as conn:
             rows = proj.list_projects(conn, include_archived=include_archived)
-        return {"projects": [r.to_dict() for r in rows], "count": len(rows)}
+        return {"projects": [r.to_dict() for r in rows], "count": len(rows), "usage": USAGE}
 
     @server.tool(
         name="create_project",
@@ -109,7 +109,8 @@ def build_server(app: App) -> MCPServer:
                 scope=scope, success_criteria=success_criteria, slug=slug,
             )
         log.info("event=create_project created=%s", created)
-        return {"slug": s, "created": created} if created else {"slug": s, "created": False, "exists": True}
+        return ({"slug": s, "created": True} if created else {"slug": s, "created": False, "exists": True}) | {
+            "usage": USAGE}
 
     threshold = float(app.config.get("synthesis.near_duplicate_threshold", 0.85))
 
@@ -305,6 +306,7 @@ def build_server(app: App) -> MCPServer:
             out = do_get_context(conn, app.paths, app.config, pid, scope=scope, budget_tokens=budget_tokens,
                                  topics=topics)
             out["checkpoint_status"] = checkpoint_status(conn, pid)
+            out["usage"] = USAGE
         log.info("event=get_context scope=%s est_tokens=%s file=%s", scope, out["est_tokens"]["est"],
                  "file_path" in out)
         return out

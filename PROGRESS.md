@@ -35,7 +35,10 @@ Resume from this file alone. Spec: `../ContextBridge_ClaudeCode_Prompt.md`. Blue
 - [x] `ctxb hook session-start`: finds the project linked to cwd (closest ancestor), prints its brief context (≤ 9,500 chars) wrapped as memory data; never fails the session (exit 0, empty output on any error)
 - [x] `ctxb snippet claude-md|desktop <slug>`; `docs/INSTALL.md`; README install section; doctor reports hook + linked folders
 - [x] Real install on the user's Mac (user approved 2026-10-31): `uv tool install` → ~/.local/bin; `ctxb init`; `install-claude-code` (mcp user scope + SessionStart hook) and `install-claude-desktop`; backups in ~/.contextbridge/backups/client-configs; Desktop config identical apart from `mcpServers`; `claude mcp get` = ✔ Connected; doctor all ✓; a normal (non-test) Claude Code session called list_projects through it
-- [ ] Claude Desktop manual checks with the user: tools visible, server instructions/prompts honoured (V8/V9), config survives an account switch
+- [x] Claude Desktop check 1 (user, 2026-10-31): after ⌘Q + reopen, "List my ContextBridge projects" worked (tools work in Desktop, V9 ✓). Desktop log: initialize, tools/list, prompts/list, resources/list all answered
+- [x] Claude Desktop check 2: the model did NOT see the server `instructions` (V8 ✗) → fallback implemented: `usage` habits text in list_projects / create_project / get_context results
+- [ ] Re-check in Desktop that the habits now reach the model (via the `usage` field)
+- [ ] Optional: config survives a Claude account switch
 
 ## M7 verification (so far)
 - `uv run pytest`: 172 passed. New: Desktop merge keeps other servers/keys, backup byte-identical and 600, original file mode kept, dry run changes nothing, idempotent, uninstall restores the original exactly, invalid JSON and wrong shapes refused untouched, custom data dir → `env`; Claude Code: exact verified `claude mcp add` arguments, hook merged next to existing SessionStart/PreToolUse hooks and other settings, idempotent, uninstall removes only ours; hook output for a linked subfolder, nothing for unrelated folders or bad input; the installer's shell-quoted hook command runs via `sh -c` from a path containing an apostrophe; a broken data dir yields exit 0 and no output.

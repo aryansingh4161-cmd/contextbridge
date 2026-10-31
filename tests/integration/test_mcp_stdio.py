@@ -35,7 +35,10 @@ async def test_create_then_list(home: Path) -> None:
     async with Client(params(home)) as c:
         r = await c.call_tool("create_project", {"name": "SIH Docs", "objective": "Verify",
                                                   "slug": "sih-docverify"})
-        assert not r.is_error and r.structured_content == {"slug": "sih-docverify", "created": True}
+        assert not r.is_error and r.structured_content is not None
+        assert {k: v for k, v in r.structured_content.items() if k != "usage"} == {"slug": "sih-docverify",
+                                                                                   "created": True}
+        assert "checkpoint" in r.structured_content["usage"], "habits travel in results (Desktop drops instructions)"
         r = await c.call_tool("list_projects", {})
         assert r.structured_content is not None
         assert [p["slug"] for p in r.structured_content["projects"]] == ["sih-docverify"]
