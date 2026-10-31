@@ -152,9 +152,8 @@ def _purge_backup(path: Path, slug: str) -> int:
         bc.close()
 
 
-def purge_entry(conn: sqlite3.Connection, paths: DataPaths, project_id: int, entry_id: int) -> dict[str, Any]:
-    """Permanently remove one entry: the row, its history, its conflicts, every knowledge snapshot that
-    contains it (rewritten, hash recomputed), and its rows in every DB backup. Irreversible."""
+def _scrub_payload(raw: bytes, codec: str, entry_id: int) -> tuple[bytes, str] | None:
+    """Remove one entry (and conflicts naming it) from a knowledge snapshot payload; None if absent."""
     import hashlib
     import json
 
@@ -162,36 +161,102 @@ def purge_entry(conn: sqlite3.Connection, paths: DataPaths, project_id: int, ent
 
     from .snapshots import _canon
 
-    _secure(conn)
+    payload = json.loads(zstd.decompress(raw) if codec == "zstd" else raw)
+    entries = [e for e in payload.get("entries", []) if e.get("id") != entry_id]
+    conflicts = [c for c in payload.get("conflicts", []) if entry_id not in (c.get("entry_a"), c.get("entry_b"))]
+    if len(entries) == len(payload.get("entries", [])) and len(conflicts) == len(payload.get("conflicts", [])):
+        return None
+    payload["entries"], payload["conflicts"] = entries, conflicts
+    data = _canon(payload)
+    return zstd.compress(data), hashlib.sha256(data).hexdigest()
+
+
+def _scrub_db(conn: sqlite3.Connection, project_id: int, entry_id: int) -> int:
+    """Delete the entry row (history/conflicts cascade) and rewrite every knowledge snapshot containing it."""
+    conn.execute("DELETE FROM entries WHERE id = ? AND project_id = ?", (entry_id, project_id))
     rewritten = 0
-    with write_tx(conn):
-        conn.execute("DELETE FROM entries WHERE id = ? AND project_id = ?", (entry_id, project_id))
-        for s in conn.execute("SELECT id, codec, payload FROM snapshots WHERE project_id = ? AND component = 'knowledge'",
-                              (project_id,)).fetchall():
-            raw = zstd.decompress(s["payload"]) if s["codec"] == "zstd" else bytes(s["payload"])
-            payload = json.loads(raw)
-            entries = [e for e in payload.get("entries", []) if e.get("id") != entry_id]
-            conflicts = [c for c in payload.get("conflicts", []) if entry_id not in (c.get("entry_a"), c.get("entry_b"))]
-            if len(entries) == len(payload.get("entries", [])) and len(conflicts) == len(payload.get("conflicts", [])):
-                continue
-            payload["entries"], payload["conflicts"] = entries, conflicts
-            data = _canon(payload)
+    for sid, codec, payload in conn.execute(
+            "SELECT id, codec, payload FROM snapshots WHERE project_id = ? AND component = 'knowledge'",
+            (project_id,)).fetchall():
+        new = _scrub_payload(bytes(payload), codec, entry_id)
+        if new is not None:
             conn.execute("UPDATE snapshots SET payload = ?, codec = 'zstd', content_hash = ? WHERE id = ?",
-                         (zstd.compress(data), hashlib.sha256(data).hexdigest(), s["id"]))
+                         (new[0], new[1], sid))
             rewritten += 1
+    return rewritten
+
+
+def _scrub_archive(z: Path, slug: str, entry_id: int) -> bool:
+    """Rewrite a full-export ZIP so the project's dump no longer contains the entry; True if changed."""
+    import base64
+    import hashlib
+    import json
+    import zipfile
+
+    member = f"projects/{slug}.json"
+    with zipfile.ZipFile(z) as zf:
+        if member not in zf.namelist():
+            return False
+        contents = {n: zf.read(n) for n in zf.namelist()}
+    dump = json.loads(contents[member])
+    t = dump["tables"]
+    before = json.dumps(t, sort_keys=True)
+    t["entries"] = [e for e in t.get("entries", []) if e.get("id") != entry_id]
+    t["entry_history"] = [h for h in t.get("entry_history", []) if h.get("entry_id") != entry_id]
+    t["conflicts"] = [c for c in t.get("conflicts", []) if entry_id not in (c.get("entry_a"), c.get("entry_b"))]
+    for snap in t.get("snapshots", []):
+        if snap.get("component") != "knowledge" or not isinstance(snap.get("payload"), dict):
+            continue
+        new = _scrub_payload(base64.b64decode(snap["payload"]["$b64"]), snap.get("codec", "zstd"), entry_id)
+        if new is not None:
+            snap["payload"] = {"$b64": base64.b64encode(new[0]).decode("ascii")}
+            snap["codec"], snap["content_hash"] = "zstd", new[1]
+    if json.dumps(t, sort_keys=True) == before:
+        return False
+    data = json.dumps(dump, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    manifest = json.loads(contents["manifest.json"])
+    for item in manifest.get("projects", []):
+        if item.get("file") == member:
+            item["sha256"] = hashlib.sha256(data).hexdigest()
+    contents[member], contents["manifest.json"] = data, json.dumps(manifest, ensure_ascii=False, indent=2).encode()
+    tmp = z.with_name(z.name + ".partial")
+    with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as out:
+        for n, b in contents.items():
+            out.writestr(n, b)
+    tmp.replace(z)
+    return True
+
+
+def purge_entry(conn: sqlite3.Connection, paths: DataPaths, project_id: int, entry_id: int) -> dict[str, Any]:
+    """Permanently remove one entry from the live DB (row, history, conflicts, every knowledge snapshot),
+    from every DB backup (matched by project SLUG, including the snapshots inside them), and from
+    every recovery archive of the project. Irreversible."""
+    _secure(conn)
+    slug = conn.execute("SELECT slug FROM projects WHERE id = ?", (project_id,)).fetchone()["slug"]
+    with write_tx(conn):
+        rewritten = _scrub_db(conn, project_id, entry_id)
     conn.execute("VACUUM")
     cleaned = 0
-    for b in sorted(paths.backups.glob("*.db")):
+    for b in sorted(paths.backups.rglob("*.db")):
         bc = sqlite3.connect(b)
         try:
             bc.execute("PRAGMA foreign_keys = ON")
             bc.execute("PRAGMA secure_delete = ON")
-            n = bc.execute("DELETE FROM entries WHERE id = ? AND project_id = ?", (entry_id, project_id)).rowcount
+            r = bc.execute("SELECT id FROM projects WHERE slug = ?", (slug,)).fetchone()
+            if r is None:
+                continue
+            had = bc.execute("SELECT count(*) FROM entries WHERE id = ? AND project_id = ?", (entry_id, r[0])).fetchone()[0]
+            n = _scrub_db(bc, r[0], entry_id)
             bc.commit()
-            if n:
+            if had or n:
                 bc.execute("VACUUM")
                 cleaned += 1
         finally:
             bc.close()
+    archives = 0
+    deleted = paths.backups / "deleted-projects"
+    for z in sorted(deleted.glob("*.zip")) if deleted.is_dir() else []:
+        archives += _scrub_archive(z, slug, entry_id)
     return {"purged_entry": entry_id, "snapshots_rewritten": rewritten, "backups_cleaned": cleaned,
-            "note": "handoff/export files already written outside the database are not changed"}
+            "recovery_archives_rewritten": archives,
+            "note": "handoff/export files already written to exports/ are not changed; delete them if needed"}

@@ -30,15 +30,34 @@ def _project(app: App, slug: str = "pp", name: str = "My Project") -> int:
 
 
 def _on_disk(app: App) -> bool:
-    """Is MARK anywhere in the DB file, its WAL, or any backup (raw bytes, plus decompressed snapshots)?"""
+    """Is MARK anywhere: DB file, WAL, backups (raw bytes AND their decompressed snapshots), recovery
+    archives (unzipped, with their base64 snapshot payloads decompressed)?"""
+    import base64
+    import sqlite3
+    import zipfile
     app.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    files = [app.paths.db, Path(str(app.paths.db) + "-wal"), *app.paths.backups.rglob("*.db")]
-    for f in files:
+    dbs = [app.paths.db, *app.paths.backups.rglob("*.db")]
+    for f in [*dbs, Path(str(app.paths.db) + "-wal")]:
         if f.exists() and MARK.encode() in f.read_bytes():
             return True
-    for (payload,) in app.conn.execute("SELECT payload FROM snapshots"):
-        if MARK.encode() in zstd.decompress(payload):
-            return True
+    for db in dbs:
+        c = sqlite3.connect(db)
+        try:
+            for (payload,) in c.execute("SELECT payload FROM snapshots"):
+                if MARK.encode() in zstd.decompress(payload):
+                    return True
+        finally:
+            c.close()
+    for z in app.paths.backups.rglob("*.zip"):
+        with zipfile.ZipFile(z) as zf:
+            for n in zf.namelist():
+                data = zf.read(n)
+                if MARK.encode() in data:
+                    return True
+                if n.startswith("projects/"):
+                    for snap in json.loads(data)["tables"].get("snapshots", []):
+                        if MARK.encode() in zstd.decompress(base64.b64decode(snap["payload"]["$b64"])):
+                            return True
     return False
 
 
@@ -114,15 +133,22 @@ def test_purge_entry_scrubs_snapshots_and_backups(app: App) -> None:
                                               provenance="user_stated")]).results[0].id
     assert eid is not None
     checkpoint(app.conn, pid, CheckpointIn(summary="s", where_stopped="w", next_action="n"))  # snapshot has it
-    backup_db(app.conn, app.paths, "manual")
+    backup_db(app.conn, app.paths, "manual")          # a backup whose SNAPSHOTS also hold it (compressed)
+    from contextbridge.core.transfer import export_full
+    (app.paths.backups / "deleted-projects").mkdir(parents=True, exist_ok=True)
+    export_full(app.conn, app.paths, ["pp"], app.paths.backups / "deleted-projects")  # a recovery archive
     assert _on_disk(app)
     out = purge_entry(app.conn, app.paths, pid, eid)
     assert out["snapshots_rewritten"] >= 1 and out["backups_cleaned"] >= 1
+    assert out["recovery_archives_rewritten"] == 1
     assert not _on_disk(app)
     assert app.conn.execute("SELECT title FROM entries").fetchall()[0][0] == "stays"
     from contextbridge.core.snapshots import list_snapshots, load_snapshot
     for s in list_snapshots(app.conn, pid):
         load_snapshot(app.conn, pid, s["id"])  # hashes were recomputed: still verifiable
+    z = next((app.paths.backups / "deleted-projects").glob("*.zip"))
+    from contextbridge.core.transfer import read_archive
+    read_archive(z)  # member hashes in the rewritten archive's manifest still verify
 
 
 def test_cross_project_ids_are_refused(app: App) -> None:

@@ -46,8 +46,15 @@ def test_split_is_byte_exact_and_respects_fences() -> None:
     assert merge_parts(parts) == doc and len(parts) > 1
     for p in parts:
         assert p.count("```") % 2 == 0, "never split inside a fence"
-        assert p.startswith("#")
+        assert p.startswith(("#", "```")), "cuts only at headings or between whole blocks"
     assert split_markdown("small", lambda t: True) == ["small"]
+    # one big section without sub-headings is cut between blocks, never inside a fence or a table
+    big = "# Facts\n\n" + "".join(f"- fact {i} " + "x" * 60 + "\n\n" for i in range(30)) \
+        + "```\ncode\n\nstill code\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nend\n"
+    parts = split_markdown(big, lambda t: len(t) <= 300)
+    assert merge_parts(parts) == big and len(parts) > 5
+    for p in parts:
+        assert p.count("```") % 2 == 0 and not p.startswith("|---")
 
 
 # ---------------------------------------------------------------- Test 13: five-session synthesis
