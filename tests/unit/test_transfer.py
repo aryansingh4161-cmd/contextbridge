@@ -197,3 +197,32 @@ def test_dry_run_and_selection(app: App, other_home: Path) -> None:
         assert [r["slug"] for r in new.conn.execute("SELECT slug FROM projects")] == ["second"]
     finally:
         new.close()
+
+
+def test_import_never_trusts_linked_dir(app: App, other_home: Path, tmp_path: Path) -> None:
+    from contextbridge.core.repo import link
+    pid, _ = five_sessions(app)
+    link(app.conn, pid, str(tmp_path))
+    out = export_full(app.conn, app.paths)
+    new = open_app(other_home, log_to_stderr=False)
+    try:
+        import_full(new.conn, new.paths, out["path"])
+        assert new.conn.execute("SELECT linked_dir FROM projects WHERE slug='sih'").fetchone()[0] is None
+    finally:
+        new.close()
+
+
+def test_git_never_runs_repo_configured_programs(tmp_path: Path) -> None:
+    import subprocess
+    from contextbridge.core.repo import repo_summary
+    repo, marker = tmp_path / "evil", tmp_path / "PWNED"
+    repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    hook = tmp_path / "hook.sh"
+    hook.write_text(f"#!/bin/sh\ntouch {marker}\n")
+    hook.chmod(0o755)
+    subprocess.run(["git", "-C", str(repo), "config", "core.fsmonitor", str(hook)], check=True)
+    (repo / "a.txt").write_text("x")
+    info = repo_summary(str(repo))
+    assert info is not None and "a.txt" in info["changes"]
+    assert not marker.exists(), "repo-configured fsmonitor program was executed"

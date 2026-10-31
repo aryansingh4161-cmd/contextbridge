@@ -22,7 +22,11 @@ MAX_CHANGES = 200
 
 
 def _git(path: Path, *args: str) -> str:
-    out = subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True, timeout=GIT_TIMEOUT_S, stdin=subprocess.DEVNULL,
+    # Repo config is untrusted (a cloned repo can set core.fsmonitor or diff drivers that run
+    # programs): disable everything that can execute, and never page.
+    safe = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "core.hooksPath=/dev/null",
+            "-c", "diff.external=", "--no-pager"]
+    out = subprocess.run(["git", *safe, "-C", str(path), *args], capture_output=True, text=True, timeout=GIT_TIMEOUT_S, stdin=subprocess.DEVNULL,
                          env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0"})
     if out.returncode != 0:
         raise RuntimeError(out.stderr.strip().splitlines()[0] if out.stderr.strip() else "git failed")
@@ -57,7 +61,7 @@ def repo_summary(linked_dir: str | None) -> dict[str, Any] | None:
     except (RuntimeError, subprocess.TimeoutExpired):
         info["changes"] = []
     try:
-        stat = _git(path, "diff", "--shortstat").strip()
+        stat = _git(path, "diff", "--no-ext-diff", "--no-textconv", "--shortstat").strip()
         info["diffstat"] = stat
     except (RuntimeError, subprocess.TimeoutExpired):
         pass

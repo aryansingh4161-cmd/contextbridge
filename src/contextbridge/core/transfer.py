@@ -59,7 +59,7 @@ TABLES: dict[str, dict[str, str]] = {
     "checkpoints": {"session_id": "sessions", "project_id": "projects"},
     "snapshots": {"project_id": "projects"},
     "raw_archive": {"project_id": "projects", "session_id": "sessions"},
-    "file_refs": {"project_id": "projects"},
+    "file_refs": {"project_id": "projects"},  # display-only paths; never executed or read
     "handoff_runs": {"project_id": "projects"},
 }
 # How each child table is selected for one project.
@@ -323,6 +323,8 @@ def _fix_row(table: str, row: dict[str, Any], maps: dict[str, dict[int, int]], s
         out[col] = new
     if table == "projects":
         out["slug"] = slug
+        # Never trust a directory path from an archive: handoffs run git there. The user re-links.
+        out["linked_dir"] = None
     if table in ("live_state", "live_state_history"):
         out["refs"] = _remap_list(out.get("refs"), maps["entries"])
     if table == "tasks":

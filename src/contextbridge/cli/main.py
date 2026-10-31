@@ -324,18 +324,33 @@ def cmd_merge(args: argparse.Namespace) -> int:
     if not groups:
         print("Nothing to merge: no file in this package was split.")
         return EXIT_OK
-    out_dir = Path(args.output) if args.output else d
+    out_dir = (Path(args.output) if args.output else d).resolve()
+    root = d.resolve()
+
+    def inside(base: Path, name: str) -> Path:
+        # Manifest names are untrusted: plain file names only, resolved inside the package.
+        if not name or "/" in name or "\\" in name or name in (".", "..") or Path(name).is_absolute():
+            raise CBError("invalid_input", f"unsafe file name in manifest: {name!r}")
+        p = (base / name).resolve()
+        if not p.is_relative_to(base):
+            raise CBError("invalid_input", f"manifest entry escapes the package folder: {name!r}")
+        return p
+
     bad = 0
     for source, parts in groups.items():
         parts.sort(key=lambda f: int(f["part"]))  # type: ignore[call-overload]
-        data = b"".join((d / str(f["name"])).read_bytes() for f in parts)
+        data = b"".join(inside(root, str(f["name"])).read_bytes() for f in parts)
         ext = str(parts[0]["name"]).rsplit(".", 1)[-1]
-        target = out_dir / f"{source}.merged.{ext}"
-        target.write_bytes(data)
         ok = hashlib.sha256(data).hexdigest() == parts[0].get("source_sha256")
         bad += not ok
-        print(f"{'✓' if ok else '✗'} {target} ({len(parts)} parts, {len(data)} bytes"
-              f"{'' if ok else ', HASH MISMATCH'})")
+        if not ok:
+            print(f"✗ {source}: {len(parts)} parts, {len(data)} bytes, HASH MISMATCH (nothing written)")
+            continue
+        target = inside(out_dir, f"{source}.merged.{ext}")
+        if target.exists():
+            raise CBError("conflict", f"{target} already exists", "choose another --output directory")
+        target.write_bytes(data)
+        print(f"✓ {target} ({len(parts)} parts, {len(data)} bytes)")
     return EXIT_ERR if bad else EXIT_OK
 
 

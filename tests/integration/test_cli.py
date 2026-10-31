@@ -122,3 +122,20 @@ def test_export_import_cli_moves_to_another_mac(home: Path, tmp_path: Path) -> N
     assert "go on" in run(other, "context", "pp", "--scope", "state").stdout
     r = run(other, "import", "--full", path)
     assert r.returncode == 1 and "already exists" in r.stderr and "--as" in r.stderr
+
+
+def test_merge_rejects_unsafe_manifest_names(home: Path, tmp_path: Path) -> None:
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (tmp_path / "secret.txt").write_text("outside")
+    (pkg / "00_manifest.json").write_text(json.dumps({"files": [
+        {"name": "../secret.txt", "upload": True, "of": 2, "part": 1, "source": "x", "source_sha256": "0"},
+        {"name": "b.md", "upload": True, "of": 2, "part": 2, "source": "x"}]}))
+    r = run(home, "merge", str(pkg))
+    assert r.returncode == 1 and "unsafe file name" in r.stderr
+    (pkg / "00_manifest.json").write_text(json.dumps({"files": [
+        {"name": "a.md", "upload": True, "of": 1, "part": 1, "source": "../../escape"},
+        {"name": "a.md", "upload": True, "of": 2, "part": 1, "source": "../../escape", "source_sha256": "0"}]}))
+    (pkg / "a.md").write_text("a")
+    r = run(home, "merge", str(pkg))
+    assert "HASH MISMATCH" in r.stdout and not (tmp_path.parent / "escape.merged.md").exists()
