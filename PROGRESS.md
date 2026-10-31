@@ -2,7 +2,7 @@
 
 Resume from this file alone. Spec: `../ContextBridge_ClaudeCode_Prompt.md`. Blueprint: `docs/BLUEPRINT.md`.
 
-**Current state (2026-10-31):** M1–M7 done. 172/172 tests pass, mypy --strict clean. 10 MCP tools + 3 prompts + 5 resources. Installed on the user's Mac (Claude Code + Desktop). Next: **M8** (budget monitor). Code: https://github.com/aryansingh4161-cmd/contextbridge (public, MIT, branch `main`). Next: **M7** (client integration).
+**Current state (2026-10-31):** M1–M7 done. 172/172 tests pass, mypy --strict clean. 10 MCP tools + 3 prompts + 5 resources. Installed on the user's Mac (Claude Code + Desktop). Next: **M8** (budget monitor). Code: https://github.com/aryansingh4161-cmd/contextbridge (public, MIT, branch `main`).
 
 | Milestone | Status | Verified how | Notes |
 |---|---|---|---|
