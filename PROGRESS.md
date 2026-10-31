@@ -2,7 +2,7 @@
 
 Resume from this file alone. Spec: `../ContextBridge_ClaudeCode_Prompt.md`. Blueprint: `docs/BLUEPRINT.md`.
 
-**Current state (2026-10-31):** M1–M6 done. 166/166 tests pass, mypy --strict clean. 10 MCP tools + 3 prompts + 5 resources. Code is in git (local repo, `main`); GitHub remote pending the user's `gh auth login`. Next: **M7** (client integration).
+**Current state (2026-10-31):** M1–M6 done. 166/166 tests pass, mypy --strict clean. 10 MCP tools + 3 prompts + 5 resources. Code: https://github.com/aryansingh4161-cmd/contextbridge (public, MIT, branch `main`). Next: **M7** (client integration).
 
 | Milestone | Status | Verified how | Notes |
 |---|---|---|---|
@@ -129,7 +129,7 @@ Resume from this file alone. Spec: `../ContextBridge_ClaudeCode_Prompt.md`. Blue
 - 2026-10-31: Full import never merges into an existing project; `--as` imports a copy. Merging two diverged copies of a project is out of scope for the MVP.
 - 2026-10-31: M5 scope correction: client installers belong to M7 (I mis-stated this in the M4 report).
 
-- 2026-10-31: GitHub (user): public repo `contextbridge`, spec copied to `docs/SPEC.md`, commits as the existing git identity. `gh` installed via brew; pushing waits on the user's one-time `gh auth login`.
+- 2026-10-31: GitHub (user): public repo `contextbridge`, spec copied to `docs/SPEC.md`, commits as the existing git identity. `gh` installed via brew; logged in as aryansingh4161-cmd; repo created and pushed 2026-10-31. License: MIT (user).
 - 2026-10-31: Import kinds from Markdown are guessed by keyword and marked `kind_guessed`; the model corrects them with `edits` on commit (the server never calls an LLM).
 - 2026-10-31: Live State from an import never overwrites existing sections unless an edit says `replace: true`.
 
