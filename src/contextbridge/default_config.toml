@@ -1,0 +1,54 @@
+# ContextBridge default configuration.
+# Copied to ~/.contextbridge/config.toml by `ctxb init`. User values override these.
+# Upload limits verified 2026-10-31 against
+# https://support.claude.com/en/articles/8241126-upload-files-to-claude
+
+[database]
+busy_timeout_ms = 5000
+backups_keep = 10
+backup_interval_hours = 24   # opportunistic: checked at startup and at each checkpoint; 0 = off
+
+[snapshots]
+keep_all_days = 30           # older snapshots thinned to one per component per day
+
+[logging]
+level = "INFO"          # INFO never includes memory content or secrets
+
+[mcp]
+inline_token_cap = 8000 # larger outputs are written to exports/ and returned as a path
+
+[synthesis]
+near_duplicate_threshold = 0.85
+stale_after_days = 30
+
+[handoff.budgets]
+quick = 3000
+standard = 10000
+detailed = 30000
+
+[telemetry]
+stale_after_seconds = 300
+thresholds = [70, 80, 85, 90, 95]
+
+[profiles.claude_chat]
+max_file_bytes = 500_000_000
+max_files = 20
+formats = ["txt", "json", "pdf"]   # .md is not in Claude's documented type list
+preferred_ext = "txt"
+
+[profiles.claude_project]
+max_file_bytes = 30_000_000
+max_files = 0                      # 0 = unlimited
+formats = ["txt", "json", "pdf"]
+preferred_ext = "txt"
+note = "Extracted text must still fit the project's context window"
+max_total_tokens = 0               # optional warning threshold for the whole package; 0 = off (no verified limit)
+
+[profiles.conservative]            # default profile
+max_file_bytes = 25_000_000
+max_files = 5
+formats = ["md", "txt"]
+preferred_ext = "md"
+
+[defaults]
+profile = "conservative"
