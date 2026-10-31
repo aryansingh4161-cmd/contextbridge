@@ -1,6 +1,8 @@
 [project]
 name = "contextbridge"
 version = "0.1.0"
+license = "MIT"
+license-files = ["LICENSE"]
 description = "Local-first, provider-independent memory and context-handoff system for AI assistants (MCP)"
 readme = "README.md"
 requires-python = ">=3.14"
