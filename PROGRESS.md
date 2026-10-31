@@ -34,7 +34,7 @@ Resume from this file alone. Spec: `../ContextBridge_ClaudeCode_Prompt.md`. Blue
 - [x] `ctxb install-claude-desktop` / `install-claude-code` (`--dry-run`, `--uninstall`, `--no-hook`): merge, never rewrite; backup to backups/client-configs (600); atomic write keeping file mode; refuse invalid JSON / wrong shapes; idempotent; iCloud-path warning for the binary
 - [x] `ctxb hook session-start`: finds the project linked to cwd (closest ancestor), prints its brief context (≤ 9,500 chars) wrapped as memory data; never fails the session (exit 0, empty output on any error)
 - [x] `ctxb snippet claude-md|desktop <slug>`; `docs/INSTALL.md`; README install section; doctor reports hook + linked folders
-- [ ] Real install on the user's Mac (`uv tool install`, both installers) — needs the user's go-ahead
+- [x] Real install on the user's Mac (user approved 2026-10-31): `uv tool install` → ~/.local/bin; `ctxb init`; `install-claude-code` (mcp user scope + SessionStart hook) and `install-claude-desktop`; backups in ~/.contextbridge/backups/client-configs; Desktop config identical apart from `mcpServers`; `claude mcp get` = ✔ Connected; doctor all ✓; a normal (non-test) Claude Code session called list_projects through it
 - [ ] Claude Desktop manual checks with the user: tools visible, server instructions/prompts honoured (V8/V9), config survives an account switch
 
 ## M7 verification (so far)
